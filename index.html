@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LazerExporter</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <div id="app">
+      <header>
+        <h1>LazerExporter</h1>
+        <div class="status-row">
+          <div id="lazer-status" class="status">正在检测 osu!lazer 目录…</div>
+          <button id="change-dir" class="compact">选择目录</button>
+          <button id="reset-dir" class="compact" hidden>恢复默认目录</button>
+        </div>
+      </header>
+
+      <div id="layout">
+        <nav id="sidebar">
+          <input id="nav-search" type="search" placeholder="搜索收藏夹…" />
+          <div class="nav-group">
+            <button class="nav-item category" data-tab="beatmaps">
+              <span class="arrow">▾</span>谱面
+            </button>
+            <div id="collection-nav" class="sub-nav"></div>
+          </div>
+          <div class="nav-group">
+            <button class="nav-item" data-tab="skins">皮肤</button>
+          </div>
+          <div class="nav-group">
+            <button class="nav-item" data-tab="replays">回放</button>
+          </div>
+        </nav>
+
+        <div id="content">
+          <div class="toolbar">
+            <input id="search" type="search" placeholder="搜索…" />
+            <select id="sort-key" title="排序方式"></select>
+            <button id="sort-dir" title="升序/降序">↓</button>
+            <button id="select-all">全选</button>
+            <button id="invert-select">反选</button>
+            <button id="select-none">取消全选</button>
+            <span id="selection-info"></span>
+            <span style="flex: 1"></span>
+            <button id="settings-toggle">⚙ 设置</button>
+            <button id="reload">重载数据库</button>
+            <button id="export" class="primary" disabled>导出</button>
+          </div>
+
+          <div id="collection-chips" class="ruleset-filter" hidden></div>
+
+          <div id="settings-modal" class="modal-overlay" hidden>
+            <div class="modal">
+              <div class="modal-header">
+                <h2>设置</h2>
+                <button id="settings-close" class="compact">✕</button>
+              </div>
+              <div class="modal-body">
+                <label class="setting-item">
+                  <input id="perf-mode" type="checkbox" />
+                  <span>无图模式</span>
+                  <span class="setting-desc">全局设置：所有列表不加载封面，仅文本渲染</span>
+                </label>
+                <label class="setting-item">
+                  <input id="unicode-mode" type="checkbox" checked />
+                  <span>优先显示 Unicode 名称</span>
+                  <span class="setting-desc">标题/作者优先显示原名（如日文），搜索始终两者都匹配</span>
+                </label>
+              </div>
+            </div>
+          </div>
+
+          <div id="export-modal" class="modal-overlay" hidden>
+            <div class="modal">
+              <div class="modal-header">
+                <h2>导出确认</h2>
+                <button id="export-close" class="compact">✕</button>
+              </div>
+              <div class="modal-body">
+                <div id="export-summary" class="export-summary"></div>
+                <div class="export-path-row">
+                  <input id="export-path" type="text" placeholder="请选择导出路径…" readonly />
+                  <button id="export-browse">浏览…</button>
+                </div>
+                <div id="export-format-row" class="export-format-row">
+                  <label class="toggle"
+                    ><input type="radio" name="export-format" value="archive" checked />
+                    导出为压缩包（.osz/.osk）</label
+                  >
+                  <label class="toggle"
+                    ><input type="radio" name="export-format" value="folder" /> 导出为文件夹</label
+                  >
+                </div>
+                <div id="hardlink-row" class="export-format-row" hidden>
+                  <label class="toggle"
+                    ><input id="hardlink-mode" type="checkbox" /> 使用硬链接</label
+                  >
+                  <div class="setting-desc">
+                    硬链接不复制数据：瞬间完成、不占额外磁盘空间，删除导出文件不影响 lazer
+                    本体。注意：导出文件与 lazer
+                    数据是同一份，请勿手动修改导出的文件，只能由游戏修改；删除没有问题。
+                    仅当导出目录与 lazer 数据在同一磁盘分区时可用，失败时自动回退为复制。
+                  </div>
+                </div>
+                <div class="export-format-row">
+                  <label class="toggle"
+                    ><input id="overwrite-mode" type="checkbox" /> 强制覆盖</label
+                  >
+                  <div class="setting-desc">
+                    勾选后覆盖目标位置已存在的同名文件；默认跳过已存在的文件。
+                  </div>
+                </div>
+                <div class="modal-actions">
+                  <button id="export-cancel">取消</button>
+                  <button id="export-confirm" class="primary">开始导出</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div id="ruleset-filter" class="ruleset-filter" hidden>
+            <button data-ruleset="" class="chip active">全部</button>
+            <button data-ruleset="osu" class="chip">osu!</button>
+            <button data-ruleset="taiko" class="chip">taiko</button>
+            <button data-ruleset="fruits" class="chip">catch</button>
+            <button data-ruleset="mania" class="chip">mania</button>
+          </div>
+
+          <div id="exporting-modal" class="modal-overlay" hidden>
+            <div class="modal">
+              <div class="modal-header">
+                <h2>正在导出…</h2>
+                <button id="exporting-close" class="compact">✕</button>
+              </div>
+              <div class="modal-body">
+                <div id="progress-text"></div>
+                <div id="progress-bar"><div id="progress-fill"></div></div>
+                <div class="modal-actions">
+                  <button id="stop-export" class="danger">终止导出</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <main id="list"></main>
+        </div>
+      </div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

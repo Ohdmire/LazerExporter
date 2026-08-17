@@ -827,6 +827,11 @@ async function changeDir() {
     toast(`设置目录失败：${error}`, false);
     return;
   }
+  try {
+    localStorage.setItem("lazer-dir", dir);
+  } catch {
+    /* 忽略持久化失败 */
+  }
   library = null;
   els.list.innerHTML = "";
   await load();
@@ -838,6 +843,11 @@ async function resetDir() {
   } catch (error) {
     toast(`恢复默认目录失败：${error}`, false);
     return;
+  }
+  try {
+    localStorage.removeItem("lazer-dir");
+  } catch {
+    /* 忽略 */
   }
   library = null;
   els.list.innerHTML = "";
@@ -1872,7 +1882,7 @@ els.unicodeMode.addEventListener("change", () => {
 });
 els.perfMode.addEventListener("change", () => {
   perfMode = els.perfMode.checked;
-  persistSetting("setting-perf", perfMode);
+  persistSetting("perfMode", perfMode);
   render();
   // 收藏夹管理页若已加载，按新开关重渲染两列。
   if (lastCollectionPage) {

@@ -1045,9 +1045,9 @@ async function showDiskUsage() {
     els.usageContent.innerHTML = `
       <div class="usage-row"><span>目录</span><span>${escapeHtml(usage.path)}</span></div>
       <div class="usage-row"><span>文件数</span><span>${usage.fileCount.toLocaleString()}</span></div>
-      <div class="usage-row"><span>总大小（逻辑）</span><span>${fmtSize(usage.totalSize)}</span></div>
+      <div class="usage-row"><span>总大小</span><span>${fmtSize(usage.totalSize)}</span></div>
       <div class="usage-row"><span>实际占用（排除硬链接）</span><span>${fmtSize(usage.uniqueSize)}</span></div>
-      <div class="usage-row"><span>与 stable 共享（硬链接）</span><span>${fmtSize(shared)}</span></div>
+      <div class="usage-row"><span>已共享（硬链接）</span><span>${fmtSize(shared)}</span></div>
       <div class="setting-desc">从 stable 导入的文件以硬链接存在，删除 lazer 目录不会释放共享部分的空间。</div>`;
   } catch (error) {
     els.usageContent.textContent = `统计失败：${error}`;

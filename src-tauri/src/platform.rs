@@ -139,14 +139,11 @@ pub fn detect_stable_dir() -> Vec<String> {
 fn stable_install_candidates() -> Vec<PathBuf> {
     #[cfg(windows)]
     {
-        let mut candidates = Vec::new();
-        if let Some(install) = registry_install() {
-            candidates.push(install);
-        }
-        if let Some(local) = env::var_os("LOCALAPPDATA").map(PathBuf::from) {
-            candidates.push(local.join("osu!"));
-        }
-        candidates
+        // 注册表优先；整个卸载信息里都找不到 osu! 时才兜底 %LOCALAPPDATA%\osu!。
+        registry_install()
+            .or_else(|| env::var_os("LOCALAPPDATA").map(|local| PathBuf::from(local).join("osu!")))
+            .into_iter()
+            .collect()
     }
     #[cfg(not(windows))]
     {
@@ -264,13 +261,41 @@ fn registry_install() -> Option<PathBuf> {
                 if !display_name.eq_ignore_ascii_case("osu!") {
                     continue;
                 }
+                // 优先 InstallLocation；缺失时（部分安装条目只有卸载串）从
+                // UninstallString（如 `D:\osu!\osu!.exe -uninstall`）取 exe 所在目录。
                 if let Ok(path) = subkey.get_value::<String, _>("InstallLocation") {
-                    if !path.trim().is_empty() {
-                        return Some(PathBuf::from(path.trim().trim_matches('"')));
+                    let path = path.trim().trim_matches('"');
+                    if !path.is_empty() {
+                        return Some(PathBuf::from(path));
+                    }
+                }
+                if let Ok(uninstall) = subkey.get_value::<String, _>("UninstallString") {
+                    if let Some(dir) = dir_from_uninstall_string(&uninstall) {
+                        return Some(dir);
                     }
                 }
             }
         }
     }
     None
+}
+
+/// 从卸载串里提取 exe 路径的所在目录：
+/// `D:\osu!\osu!.exe -uninstall` → `D:\osu!`；带引号与参数均能处理。
+#[cfg(windows)]
+fn dir_from_uninstall_string(uninstall: &str) -> Option<PathBuf> {
+    let trimmed = uninstall.trim();
+    let exe = if let Some(rest) = trimmed.strip_prefix('"') {
+        // 引号形式："D:\osu!\osu!.exe" -uninstall
+        rest.split('"').next()?
+    } else {
+        // 裸路径形式：D:\osu!\osu!.exe -uninstall（exe 路径含空格时只能按第一个 .exe 截断）
+        let end = trimmed.find(".exe").map(|i| i + 4)?;
+        &trimmed[..end]
+    };
+    let exe = exe.trim();
+    if exe.is_empty() {
+        return None;
+    }
+    Path::new(exe).parent().map(|dir| dir.to_path_buf())
 }

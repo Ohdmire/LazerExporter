@@ -77,10 +77,8 @@ const els = {
   lazerCollectionList: document.getElementById("lazer-collection-list")!,
   stableCollectionList: document.getElementById("stable-collection-list")!,
   collectionSync: document.getElementById("collection-sync")!,
-  collectionImportPath: document.getElementById("collection-import-path") as HTMLInputElement,
-  collectionImportBrowse: document.getElementById("collection-import-browse")!,
-  collectionImportAppend: document.getElementById("collection-import-append")!,
-  collectionImportReplace: document.getElementById("collection-import-replace")!,
+  collectionDelete: document.getElementById("collection-delete")!,
+  collectionExportCopy: document.getElementById("collection-export-copy")!,
   collectionResult: document.getElementById("collection-result")!,
   dupFilter: document.getElementById("dup-filter")!,
   diskUsageBtn: document.getElementById("disk-usage-btn")!,
@@ -1155,11 +1153,16 @@ interface ColumnController {
   selectAll: () => void;
   invert: () => void;
   clear: () => void;
+  /** 原地移除若干谱面并更新 DOM（保留展开状态），集合清空则整块移除。 */
+  removeMd5s: (selections: { name: string; md5s: string[] }[]) => void;
+  /** 取某收藏夹的全部谱面 MD5（与勾选状态无关，供右键整夹删除）。 */
+  allMd5s: (name: string) => string[];
 }
 
 function renderCollectionTable(
   container: HTMLElement,
   collections: { name: string; beatmaps: BeatmapRef[] }[],
+  defaultChecked: boolean,
 ): ColumnController {
   container.innerHTML = "";
   const selection = new Map<string, Set<string>>();
@@ -1182,7 +1185,7 @@ function renderCollectionTable(
     const header = document.createElement("div");
     header.className = "row slim collection-head";
     header.innerHTML = `
-      <input type="checkbox" checked />
+      <input type="checkbox"${defaultChecked ? " checked" : ""} />
       <span class="arrow">▸</span>
       <div class="meta">
         <div class="title">${escapeHtml(collection.name)}</div>
@@ -1206,7 +1209,7 @@ function renderCollectionTable(
         }
       }
       row.innerHTML = `
-        <input type="checkbox" data-md5="${beatmap.md5}" data-collection="${escapeHtml(collection.name)}" checked />
+        <input type="checkbox" data-md5="${beatmap.md5}" data-collection="${escapeHtml(collection.name)}"${defaultChecked ? " checked" : ""} />
         ${cover}
         <div class="meta">
           <div class="title">${escapeHtml(beatmap.label || beatmap.md5.slice(0, 12))}</div>
@@ -1219,7 +1222,10 @@ function renderCollectionTable(
     container.appendChild(block);
     blocksByName.set(collection.name, block);
 
-    selection.set(collection.name, new Set(collection.beatmaps.map((b) => b.md5)));
+    selection.set(
+      collection.name,
+      new Set(defaultChecked ? collection.beatmaps.map((b) => b.md5) : []),
+    );
 
     const allBox = header.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
     const syncAllBox = () => {
@@ -1373,6 +1379,36 @@ function renderCollectionTable(
       for (const [name] of selection) selection.set(name, new Set());
       refreshCollectionBoxes();
     },
+    allMd5s(name: string) {
+      return collections.find((c) => c.name === name)?.beatmaps.map((b) => b.md5) ?? [];
+    },
+    removeMd5s(target: { name: string; md5s: string[] }[]) {
+      for (const item of target) {
+        const block = blocksByName.get(item.name);
+        const md5s = selection.get(item.name);
+        if (!block || !md5s) continue;
+        for (const md5 of item.md5s) {
+          md5s.delete(md5);
+          block
+            .querySelector(`input[data-md5="${md5}"]`)
+            ?.closest<HTMLElement>(".beatmap-row")
+            ?.remove();
+        }
+        const remaining = block.querySelectorAll(".beatmap-row").length;
+        if (remaining === 0) {
+          block.remove();
+          blocksByName.delete(item.name);
+          selection.delete(item.name);
+          continue;
+        }
+        const head = block.querySelector<HTMLInputElement>(
+          '.collection-head input[type="checkbox"]',
+        )!;
+        head.checked = md5s.size > 0 && md5s.size === remaining;
+        const sub = block.querySelector<HTMLElement>(".collection-head .sub");
+        if (sub) sub.textContent = `${md5s.size}/${remaining} 张谱面已选`;
+      }
+    },
   };
 }
 
@@ -1399,8 +1435,8 @@ async function loadCollectionPage() {
     els.collectionSummary.textContent =
       `stable 目录:${page.stableDir} · osu!.db 收录 ${page.osuDbBeatmaps.toLocaleString()} 张难度 · ` +
       `lazer 收藏夹 ${page.lazerCollections.length} 个 · collection.db 收藏夹 ${page.stableCollections.length} 个`;
-    lazerColumn = renderCollectionTable(els.lazerCollectionList, page.lazerCollections);
-    stableColumn = renderCollectionTable(els.stableCollectionList, page.stableCollections);
+    lazerColumn = renderCollectionTable(els.lazerCollectionList, page.lazerCollections, true);
+    stableColumn = renderCollectionTable(els.stableCollectionList, page.stableCollections, false);
   } catch (error) {
     els.collectionSummary.textContent = `读取失败:${error}`;
   }
@@ -1413,16 +1449,33 @@ function syncMode(): string {
   );
 }
 
-async function collectionResultOf(promise: Promise<{ writtenCollections: number; written_hashes?: number; writtenHashes?: number; backup: string }>) {
+async function collectionResultOf(
+  promise: Promise<{ writtenCollections: number; written_hashes?: number; writtenHashes?: number; backup: string }>,
+  reload = true,
+) {
   try {
     const result = await promise;
     els.collectionResult.textContent =
-      `完成（预览副本）：结果已写入 ${result.backup}，现有 ${result.writtenCollections} 个收藏夹。` +
-      `原 collection.db 未被修改，确认无误后请手动用副本替换原文件。`;
-    await loadCollectionPage();
+      `完成（工作副本）：已复制到 ${result.backup}，现有 ${result.writtenCollections} 个收藏夹。` +
+      `原 collection.db 未被修改；点“导出 collection.db”可把它落到任意目录。`;
+    if (reload) await loadCollectionPage();
   } catch (error) {
     els.collectionResult.textContent = `失败:${error}`;
   }
+}
+
+/** 删除类操作：后端写副本成功后原地更新列表，保留展开状态。 */
+async function deleteInPlace(selections: { name: string; md5s: string[] }[], describe: string) {
+  const stableDir = els.stablePath.textContent.trim();
+  if (stableDir === "未设置") return;
+  const total = selections.reduce((sum, s) => sum + s.md5s.length, 0);
+  if (!total) return;
+  if (!confirm(`确定在工作副本上${describe}（共 ${total} 张谱面）？原 collection.db 不会改动。`)) return;
+  await collectionResultOf(
+    invoke("delete_stable_collections", { stableDir, selections }),
+    false,
+  );
+  stableColumn?.removeMd5s(selections);
 }
 
 
@@ -1475,7 +1528,18 @@ els.pageNav.addEventListener("click", (event) => {
   if (!chip?.dataset.page) return;
   switchPage(chip.dataset.page as "export" | "space" | "collections" | "settings");
 });
-els.collectionLoad.addEventListener("click", loadCollectionPage);
+els.collectionLoad.addEventListener("click", async () => {
+  // 重新读取 = 舍弃工作副本上的修改；读取时会从原 collection.db 重建副本。
+  const stableDir = els.stablePath.textContent.trim();
+  if (stableDir && stableDir !== "未设置") {
+    try {
+      await invoke("discard_collection_changes", { stableDir });
+    } catch {
+      /* 无副本时忽略 */
+    }
+  }
+  await loadCollectionPage();
+});
 
 // ---- stable 列右键删除（lazer 侧只读，不提供任何修改入口）----
 const ctxMenu = document.getElementById("collection-context-menu")!;
@@ -1493,25 +1557,33 @@ function deleteViaContext(selections: { name: string; md5s: string[] }[], descri
   if (stableDir === "未设置") return;
   const total = selections.reduce((sum, s) => sum + s.md5s.length, 0);
   if (!total) return;
-  if (!confirm(`确定从 collection.db ${describe}（共 ${total} 张谱面）吗？`)) return;
-  collectionResultOf(invoke("delete_stable_collections", { stableDir, selections }));
+  deleteInPlace(selections, describe);
 }
 
 els.stableCollectionList.addEventListener("contextmenu", (event) => {
   event.preventDefault();
+  // 阻止冒泡到 document 级的关闭器，否则菜单刚打开就被立即关闭。
+  event.stopPropagation();
   hideContextMenu();
   const target = event.target as HTMLElement;
   const beatmapRow = target.closest<HTMLElement>(".beatmap-row");
   const head = target.closest<HTMLElement>(".collection-head");
+  const beatmapButton = document.getElementById("ctx-delete-beatmap")!;
+  const collectionButton = document.getElementById("ctx-delete-collection")!;
   if (beatmapRow) {
     const box = beatmapRow.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
     ctxBeatmap = { collection: box.dataset.collection!, md5: box.dataset.md5! };
-    ctxCollection = box.dataset.collection!;
+    ctxCollection = null;
+    // 右键谱面：只显示“删除该谱面”。
+    beatmapButton.hidden = false;
+    collectionButton.hidden = true;
   } else if (head) {
-    ctxCollection =
-      head.querySelector<HTMLElement>(".title")?.textContent ?? null;
+    ctxCollection = head.querySelector<HTMLElement>(".title")?.textContent ?? null;
+    // 右键收藏夹：只显示“删除该收藏夹”。
+    beatmapButton.hidden = true;
+    collectionButton.hidden = false;
   }
-  if (!ctxCollection) return;
+  if (!beatmapRow && !ctxCollection) return;
   ctxMenu.hidden = false;
   ctxMenu.style.left = `${Math.min(event.clientX, window.innerWidth - 190)}px`;
   ctxMenu.style.top = `${Math.min(event.clientY, window.innerHeight - 140)}px`;
@@ -1523,24 +1595,28 @@ document.addEventListener("click", (event) => {
 document.addEventListener("contextmenu", (event) => {
   if (!ctxMenu.hidden && !ctxMenu.contains(event.target as Node)) hideContextMenu();
 });
-document.getElementById("ctx-delete-selected")!.addEventListener("click", () => {
-  if (!stableColumn) return hideContextMenu();
+els.collectionDelete.addEventListener("click", () => {
+  if (!stableColumn) return;
+  const stableDir = els.stablePath.textContent.trim();
+  if (stableDir === "未设置") return;
   const selections = selectionToParam(stableColumn.selection);
-  hideContextMenu();
-  if (selections.length) deleteViaContext(selections, "删除勾选的谱面");
+  if (!selections.length) return;
+  deleteViaContext(selections, "删除勾选的谱面");
 });
 document.getElementById("ctx-delete-beatmap")!.addEventListener("click", () => {
   const target = ctxBeatmap;
+  if (!target) return hideContextMenu();
   hideContextMenu();
-  if (target) deleteViaContext([{ name: target.collection, md5s: [target.md5] }], "删除这张谱面");
+  deleteViaContext([{ name: target.collection, md5s: [target.md5] }], "删除该谱面");
 });
 document.getElementById("ctx-delete-collection")!.addEventListener("click", () => {
   const name = ctxCollection;
   hideContextMenu();
   if (!name || !stableColumn) return;
-  const md5s = stableColumn.selection.get(name);
-  if (!md5s?.size) return;
-  deleteViaContext([{ name, md5s: [...md5s] }], "删除这个收藏夹");
+  // 右键整夹删除不依赖勾选状态：直接取该收藏夹全部谱面。
+  const md5s = stableColumn.allMd5s(name);
+  if (!md5s.length) return;
+  deleteViaContext([{ name, md5s }], "删除该收藏夹");
 });
 document.getElementById("lazer-col-all")!.addEventListener("click", () => lazerColumn?.selectAll());
 document.getElementById("lazer-col-invert")!.addEventListener("click", () => lazerColumn?.invert());
@@ -1563,27 +1639,18 @@ els.collectionSync.addEventListener("click", () => {
   }
   collectionResultOf(invoke("sync_collections", { stableDir, selections, mode }));
 });
-els.collectionImportBrowse.addEventListener("click", async () => {
-  const file = await open({
-    multiple: false,
-    title: "选择要导入的 collection.db 文件",
-    filters: [{ name: "collection.db", extensions: ["db"] }],
-  });
-  if (typeof file === "string") els.collectionImportPath.value = file;
-});
-els.collectionImportAppend.addEventListener("click", () => {
+els.collectionExportCopy.addEventListener("click", async () => {
   const stableDir = els.stablePath.textContent.trim();
   if (stableDir === "未设置") return;
-  const fromFile = els.collectionImportPath.value.trim();
-  if (!stableDir || !fromFile) return;
-  collectionResultOf(invoke("import_collections", { fromFile, stableDir, mode: "append" }));
-});
-els.collectionImportReplace.addEventListener("click", () => {
-  const stableDir = els.stablePath.textContent.trim();
-  if (stableDir === "未设置") return;
-  const fromFile = els.collectionImportPath.value.trim();
-  if (!stableDir || !fromFile) return;
-  collectionResultOf(invoke("import_collections", { fromFile, stableDir, mode: "replace" }));
+  const target = await open({ directory: true, title: "选择导出目录" });
+  if (!target) return;
+  try {
+    const path = await invoke<string>("export_collection_copy", { stableDir, targetDir: target });
+    els.collectionResult.textContent =
+      `已导出工作副本到：${path}（目标目录中的同名文件会被覆盖）。`;
+  } catch (error) {
+    els.collectionResult.textContent = `导出失败：${error}`;
+  }
 });
 
 els.diskUsageBtn.addEventListener("click", showDiskUsage);

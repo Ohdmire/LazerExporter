@@ -126,7 +126,7 @@
             <h2 class="page-title">集合管理</h2>
             <div id="collections-stable-dir" class="setting-desc">未设置 stable 目录（在设置页选择）</div>
             <div class="export-format-row">
-              <div class="setting-desc">读取 client.realm / collection.db / osu!.db 交叉定位；写盘前自动备份。</div>
+              <div class="setting-desc">所有修改写入 collection.export.db 工作副本（原文件不动）；stable 列右键谱面/收藏夹可单独删除</div>
               <span style="flex: 1"></span>
               <button id="collection-load" class="primary">读取数据</button>
             </div>
@@ -135,7 +135,7 @@
             <div class="collection-columns">
               <div class="collection-col">
                 <div class="collection-col-head">
-                  <h3 class="section-title">lazer 收藏夹 → 导出（只读）</h3>
+                  <h3 class="section-title">lazer 收藏夹（只读）</h3>
                   <button id="lazer-col-all" class="compact">全选</button>
                   <button id="lazer-col-invert" class="compact">反选</button>
                   <button id="lazer-col-none" class="compact">取消</button>
@@ -149,6 +149,7 @@
                   <button id="stable-col-all" class="compact">全选</button>
                   <button id="stable-col-invert" class="compact">反选</button>
                   <button id="stable-col-none" class="compact">取消</button>
+                  <button id="collection-delete" class="compact danger-text">删除选中</button>
                 </div>
                 <div id="stable-collection-list" class="collection-table"></div>
               </div>
@@ -157,19 +158,15 @@
             <div class="collection-actions">
               <div class="action-row">
                 <label class="toggle"
-                  ><input type="radio" name="sync-mode" value="append" checked /> 导出·追加</label
+                  ><input type="radio" name="sync-mode" value="append" checked /> 复制·追加</label
                 >
                 <label class="toggle"
-                  ><input type="radio" name="sync-mode" value="replace" /> 导出·替换</label
+                  ><input type="radio" name="sync-mode" value="replace" /> 复制·替换</label
                 >
-                <button id="collection-sync" class="primary">导出所选 → collection.db</button>
+                <button id="collection-sync" class="primary">复制所选到 collection.db</button>
               </div>
               <div class="action-row">
-                <div class="setting-desc">所有修改均为预览性质：结果写入 collection.export.db 副本，原 collection.db 永不改动；右键 stable 列表可删除谱面/收藏夹（lazer 侧只读）。</div>
-                <input id="collection-import-path" type="text" placeholder="导入外部 collection.db…" readonly class="hidden-input" />
-                <button id="collection-import-browse" class="compact">选择文件…</button>
-                <button id="collection-import-append" class="compact">导入·追加</button>
-                <button id="collection-import-replace" class="compact">导入·替换</button>
+                <button id="collection-export-copy" class="primary">导出 collection.db…</button>
               </div>
             </div>
             <div id="collection-result" class="setting-desc"></div>
@@ -186,8 +183,8 @@
                 <h3 class="section-title">压缩 lazer 空间（与 stable 去重）</h3>
                 <div class="setting-desc">
                   扫描 stable 谱面目录，把 lazer files/
-                  中内容完全一致的重复文件替换为指向 stable 的硬链接，释放重复占用的空间。建议先关闭
-                  osu!lazer 再执行。
+                  中内容完全一致的重复文件替换为指向 stable 的硬链接，释放重复占用的空间。
+                  先关闭 osu!lazer 再执行。
                 </div>
                 <div class="export-format-row">
                   <label class="toggle"
@@ -254,9 +251,8 @@
       </div>
     </div>
     <div id="collection-context-menu" hidden>
-      <button id="ctx-delete-selected">删除勾选的谱面</button>
-      <button id="ctx-delete-beatmap">删除这张谱面</button>
-      <button id="ctx-delete-collection">删除这个收藏夹</button>
+      <button id="ctx-delete-beatmap">删除该谱面</button>
+      <button id="ctx-delete-collection">删除该收藏夹</button>
     </div>
     <script type="module" src="/src/main.ts"></script>
   </body>

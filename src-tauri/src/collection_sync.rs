@@ -265,6 +265,13 @@ pub async fn load_collection_page(
             })
             .collect();
 
+        // 工作副本模型：读取时若无副本则立即从原 collection.db 创建，
+        // 之后所有读写都在副本上进行；重新读取会先删副本再重建（舍弃修改）。
+        let copy_path = export_copy_path(&collection_db_path);
+        if !copy_path.is_file() && collection_db_path.is_file() {
+            std::fs::copy(&collection_db_path, &copy_path)
+                .map_err(|e| format!("创建工作副本失败：{e}"))?;
+        }
         let stable_list = read_write_base(&collection_db_path);
         let stable_collections = stable_list
             .collections
@@ -414,60 +421,37 @@ pub async fn sync_collections(
     .map_err(|join| join.to_string())?
 }
 
-/// 导入外部 collection.db → stable collection.db（追加/替换同名）。
+/// 把工作副本导出到指定目录（覆盖同名 collection.db）。
 #[tauri::command]
-pub async fn import_collections(
-    from_file: String,
+pub async fn export_collection_copy(
     stable_dir: String,
-    mode: String,
-) -> Result<SyncResult, String> {
+    target_dir: String,
+) -> Result<String, String> {
     tokio::task::spawn_blocking(move || {
-        let from = PathBuf::from(&from_file);
-        if !from.is_file() {
-            return Err("所选 collection.db 文件不存在".into());
+        let copy = PathBuf::from(&stable_dir).join("collection.export.db");
+        if !copy.is_file() {
+            return Err("工作副本不存在，请先读取数据".into());
         }
-        let source = CollectionList::from_file(&from)
-            .map_err(|e| format!("解析所选 collection.db 失败：{e}"))?;
-        let stable = PathBuf::from(&stable_dir);
-        let collection_db = stable.join("collection.db");
-        let mut list = read_write_base(&collection_db);
-        let out_path = export_copy_path(&collection_db);
+        let target = PathBuf::from(&target_dir).join("collection.db");
+        std::fs::copy(&copy, &target)
+            .map_err(|e| format!("导出失败：{e}"))
+            .map(|_| target.display().to_string())
+    })
+    .await
+    .map_err(|join| join.to_string())?
+}
 
-        let mut written_hashes = 0usize;
-        for collection in &source.collections {
-            let Some(name) = &collection.name else { continue };
-            if name.is_empty() {
-                continue;
-            }
-            written_hashes += collection.beatmap_hashes.len();
-            if mode == "replace" {
-                if let Some(existing) = list
-                    .collections
-                    .iter_mut()
-                    .find(|c| c.name.as_deref() == Some(name.as_str()))
-                {
-                    *existing = collection.clone();
-                } else {
-                    list.collections.push(collection.clone());
-                }
-            // 追加模式 = 替换模式语义（同名内容以导入文件为准），见下。
-            } else if !list
-                .collections
-                .iter()
-                .any(|c| c.name.as_deref() == Some(name.as_str()))
-            {
-                list.collections.push(collection.clone());
-            }
+/// 丢弃副本：删除 collection.export.db，重新读取时回到原 collection.db 的状态。
+#[tauri::command]
+pub async fn discard_collection_changes(stable_dir: String) -> Result<bool, String> {
+    tokio::task::spawn_blocking(move || {
+        let copy = PathBuf::from(&stable_dir).join("collection.export.db");
+        if copy.is_file() {
+            std::fs::remove_file(&copy).map_err(|e| format!("删除副本失败：{e}"))?;
+            Ok(true)
+        } else {
+            Ok(false)
         }
-        let written = list.collections.len();
-        list.to_file(&out_path)
-            .map_err(|e| format!("写入 collection.export.db 失败：{e}"))?;
-        Ok(SyncResult {
-            mode,
-            written_collections: written,
-            written_hashes,
-            backup: out_path.display().to_string(),
-        })
     })
     .await
     .map_err(|join| join.to_string())?

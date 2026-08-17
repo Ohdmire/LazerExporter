@@ -552,6 +552,10 @@ header h1 {
   flex-basis: 100%;
 }
 
+button.compact.danger-text {
+  color: #e06c75;
+}
+
 button.danger {
   background: #8e2f3c;
   border-color: #8e2f3c;
@@ -798,6 +802,10 @@ button:disabled {
   margin-top: 2px;
   font-size: 12px;
   color: var(--muted);
+}
+
+#collection-context-menu[hidden] {
+  display: none;
 }
 
 #collection-context-menu {

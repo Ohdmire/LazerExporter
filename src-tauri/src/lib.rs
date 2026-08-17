@@ -25,8 +25,9 @@ pub fn run() {
             maintenance::cancel_dedupe,
             collection_sync::load_collection_page,
             collection_sync::sync_collections,
-            collection_sync::import_collections,
+            collection_sync::export_collection_copy,
             collection_sync::delete_stable_collections,
+            collection_sync::discard_collection_changes,
         ])
         .setup(|_app| {
             platform::init_config();

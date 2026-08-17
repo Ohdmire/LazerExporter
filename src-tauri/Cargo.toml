@@ -1,6 +1,6 @@
 [package]
 name = "lazer-exporter"
-version = "0.1.0"
+version = "0.1.2"
 description = "Export osu!lazer beatmap sets to .osz files"
 authors = ["ATRI1024"]
 edition = "2021"

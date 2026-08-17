@@ -221,6 +221,19 @@ function setStatus(text: string, ok: boolean | null = null) {
   els.status.className = "status" + (ok === true ? " ok" : ok === false ? " err" : "");
 }
 
+/** 所有非顶栏提示统一用 toast：右上角浮层，几秒后自动消失。 */
+function toast(text: string, ok: boolean | null = null) {
+  const host = document.getElementById("toast-host")!;
+  const el = document.createElement("div");
+  el.className = "toast" + (ok === true ? " ok" : ok === false ? " err" : "");
+  el.textContent = text;
+  host.appendChild(el);
+  setTimeout(() => {
+    el.classList.add("fade");
+    setTimeout(() => el.remove(), 400);
+  }, 3500);
+}
+
 /** 按 Unicode 开关取显示名：开 = Unicode 优先，关 = 罗马字优先。 */
 function pickName(unicode: string, romanized: string): string {
   const first = unicodeMode ? unicode : romanized;
@@ -770,14 +783,15 @@ function renderSidebar() {
 // ---- 数据加载与导出 ----
 
 async function load() {
-  setStatus("正在读取 client.realm…");
   try {
     const status = await invoke<LazerStatus>("detect_lazer");
     els.lazerPath.textContent = status.dataRoot ?? "未检测到";
     els.resetDir.hidden = !status.usingCustom;
     filesRoot = status.filesRoot;
     if (!status.realmPath) {
-      setStatus(
+      els.status.textContent = status.dataRoot ?? "未检测到";
+      els.status.className = "status err";
+      toast(
         status.usingCustom
           ? `所选目录中没有 client.realm，请重新选择。`
           : `未找到 osu!lazer 数据目录（期望 ${status.dataRoot ?? "?"}）。可点击“选择目录”手动指定。`,
@@ -785,20 +799,22 @@ async function load() {
       );
       return;
     }
+    // 加载期间顶栏先显示目录，加载完成后再补全统计信息。
+    setStatus(`目录：${status.realmPath}${status.usingCustom ? "（手动指定）" : ""}`);
     const result = await invoke<{ realmPath: string; library: Library }>("list_library");
     library = result.library;
-    coverBySetId.clear();
-    for (const set of library.sets) {
-      if (set.cover_hash) coverBySetId.set(set.id, set.cover_hash);
-    }
     setStatus(
       `目录：${result.realmPath}${status.usingCustom ? "（手动指定）" : ""} · 谱面 ${library.sets.length} · 皮肤 ${library.skins.length} · 回放 ${library.scores.length}`,
       true,
     );
+    coverBySetId.clear();
+    for (const set of library.sets) {
+      if (set.cover_hash) coverBySetId.set(set.id, set.cover_hash);
+    }
     renderSidebar();
     render();
   } catch (error) {
-    setStatus(`读取失败：${error}`, false);
+    toast(`读取失败：${error}`, false);
   }
 }
 
@@ -808,7 +824,7 @@ async function changeDir() {
   try {
     await invoke("set_lazer_data_dir", { path: dir });
   } catch (error) {
-    setStatus(`设置目录失败：${error}`, false);
+    toast(`设置目录失败：${error}`, false);
     return;
   }
   library = null;
@@ -820,7 +836,7 @@ async function resetDir() {
   try {
     await invoke("set_lazer_data_dir", { path: null });
   } catch (error) {
-    setStatus(`恢复默认目录失败：${error}`, false);
+    toast(`恢复默认目录失败：${error}`, false);
     return;
   }
   library = null;
@@ -1759,22 +1775,21 @@ els.lazerAuto.addEventListener("click", async () => {
       /* 忽略 */
     }
     if (!status.realmPath) {
-      setStatus(`自动扫描未找到 client.realm（检测目录：${status.autoDataRoot ?? "?"}）`, false);
+      toast(`自动扫描未找到 client.realm（检测目录：${status.autoDataRoot ?? "?"}）`, false);
       return;
     }
-    setStatus(`已自动扫描到 lazer 目录：${status.dataRoot}`, true);
     library = null;
     els.list.innerHTML = "";
     await load();
   } catch (error) {
-    setStatus(`自动扫描失败：${error}`, false);
+    toast(`自动扫描失败：${error}`, false);
   }
 });
 els.stableAuto.addEventListener("click", async () => {
   try {
     const found = await invoke<string[]>("detect_stable_dir");
     if (!found.length) {
-      setStatus("未扫描到 osu!stable 安装目录（Linux 查找 osu-wine 位置，Windows 查找注册表/LOCALAPPDATA）", false);
+      toast("未扫描到 osu!stable 安装目录（Linux 查找 osu-wine 位置，Windows 查找注册表/LOCALAPPDATA）", false);
       return;
     }
     els.stablePath.textContent = found[0];
@@ -1784,12 +1799,8 @@ els.stableAuto.addEventListener("click", async () => {
       /* 忽略持久化失败 */
     }
     updateStableDirDisplays();
-    setStatus(
-      `已自动扫描到 stable 目录：${found[0]}${found.length > 1 ? `（另有 ${found.length - 1} 个候选）` : ""}`,
-      true,
-    );
   } catch (error) {
-    setStatus(`自动扫描失败：${error}`, false);
+    toast(`自动扫描失败：${error}`, false);
   }
 });
 els.stableBrowse.addEventListener("click", async () => {

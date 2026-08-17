@@ -1092,6 +1092,7 @@ async function runDedupe(dryRun: boolean) {
   els.dedupeProgress.hidden = false;
   els.dedupeStop.hidden = false;
   els.dedupeResult.textContent = "";
+  els.dedupeProgressFill.classList.remove("indeterminate");
   els.dedupeProgressFill.style.width = "0%";
   els.dedupeProgressText.textContent = "准备扫描…";
   try {
@@ -1138,6 +1139,7 @@ async function runDedupe(dryRun: boolean) {
     if (result.failedCount > 0) lines.push(`${result.failedCount} 个失败。`);
     els.dedupeResult.textContent = lines.join(" ");
     els.dedupeProgressText.textContent = "完成";
+    els.dedupeProgressFill.classList.remove("indeterminate");
     els.dedupeProgressFill.style.width = "100%";
   } catch (error) {
     els.dedupeResult.textContent = `失败:${error}`;
@@ -1904,7 +1906,14 @@ await listen<{ phase: string; processed: number; total: number; percent: number 
     els.dedupeProgressText.textContent = `${DEDUPE_PHASES[phase] ?? phase}（${processed}${
       total ? `/${total}` : ""
     }）`;
-    els.dedupeProgressFill.style.width = `${percent}%`;
+    if (total > 0) {
+      els.dedupeProgressFill.classList.remove("indeterminate");
+      els.dedupeProgressFill.style.width = `${percent}%`;
+    } else {
+      // 扫描阶段不知道总量：流动动画表示进行中
+      els.dedupeProgressFill.classList.add("indeterminate");
+      els.dedupeProgressFill.style.width = "";
+    }
   },
 );
 

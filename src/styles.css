@@ -755,11 +755,37 @@ button:disabled {
   overflow: hidden;
 }
 
-#progress-fill {
+#progress-fill,
+#dedupe-progress-fill {
   height: 100%;
   width: 0;
   background: var(--accent);
   transition: width 0.15s ease;
+}
+
+/* 未知总量的阶段（扫描目录）：流动动画表示进行中 */
+#dedupe-progress-fill.indeterminate {
+  width: 100%;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    var(--accent) 40%,
+    var(--accent) 60%,
+    transparent 100%
+  );
+  background-size: 40% 100%;
+  background-repeat: no-repeat;
+  animation: indeterminate-slide 1.2s linear infinite;
+  transition: none;
+}
+
+@keyframes indeterminate-slide {
+  from {
+    background-position: -40% 0;
+  }
+  to {
+    background-position: 140% 0;
+  }
 }
 
 #list {

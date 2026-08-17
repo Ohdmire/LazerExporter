@@ -790,22 +790,24 @@ async function load() {
     els.resetDir.hidden = !status.usingCustom;
     filesRoot = status.filesRoot;
     if (!status.realmPath) {
-      els.status.textContent = status.dataRoot ?? "未检测到";
+      els.status.textContent = status.filesRoot ?? status.dataRoot ?? "未检测到";
       els.status.className = "status err";
       toast(
         status.usingCustom
           ? `所选目录中没有 client.realm，请重新选择。`
-          : `未找到 osu!lazer 数据目录（期望 ${status.dataRoot ?? "?"}）。可点击“选择目录”手动指定。`,
+          : `未找到 osu!lazer 数据目录（期望 ${status.dataRoot ?? "?"}）。`,
         false,
       );
       return;
     }
+    // 顶栏与其他所有显示统一：storage.ini 的 FullPath 存在时一律显示那个目录。
+    const shownDir = status.filesRoot ?? status.dataRoot ?? "?";
     // 加载期间顶栏先显示目录，加载完成后再补全统计信息。
-    setStatus(`目录：${status.realmPath}${status.usingCustom ? "（手动指定）" : ""}`);
+    setStatus(`目录：${shownDir}`);
     const result = await invoke<{ realmPath: string; library: Library }>("list_library");
     library = result.library;
     setStatus(
-      `目录：${result.realmPath}${status.usingCustom ? "（手动指定）" : ""} · 谱面 ${library.sets.length} · 皮肤 ${library.skins.length} · 回放 ${library.scores.length}`,
+      `目录：${shownDir} · 谱面 ${library.sets.length} · 皮肤 ${library.skins.length} · 回放 ${library.scores.length}`,
       true,
     );
     coverBySetId.clear();

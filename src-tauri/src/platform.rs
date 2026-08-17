@@ -1,9 +1,10 @@
 //! osu!lazer 目录识别（仅支持 Linux 与 Windows）。检测逻辑参考 OPP：
 //! Windows 默认 `%APPDATA%\osu`，Linux 默认 `~/.local/share/osu`
-//! （Flatpak 版为 `~/.var/app/sh.ppy.osu/data/osu`）；
-//! `storage.ini` 的 `FullPath` 指向用户自定义的文件存储目录（files/ 所在处）。
-//! 用户也可以手动指定数据目录（含 client.realm）；后端仅内存保存，
-//! 由前端 localStorage 记忆并在启动时重新应用。
+//! （Flatpak 版为 `~/.var/app/sh.ppy.osu/data/osu`）。
+//! `storage.ini` 的 `FullPath` 无条件优先：lazer 迁移存储后 client.realm
+//! 与 files/ 全部位于 FullPath 指向的目录，原目录只剩 ini 与旧残留，
+//! 一律不使用。用户也可以手动指定目录（含 client.realm 或 storage.ini）；
+//! 后端仅内存保存，由前端 localStorage 记忆并在启动时重新应用。
 
 use std::env;
 use std::fs::File;
@@ -24,17 +25,33 @@ static CUSTOM_DATA_DIR: Mutex<Option<PathBuf>> = Mutex::new(None);
 
 /// 设置（或清除，传入 None）手动指定的数据目录（仅本次运行有效，
 /// 前端负责在 localStorage 记忆并在启动时重新应用）。
-/// 目录必须包含 client.realm。
+/// 所选目录可以直接含 client.realm，也可以只含 storage.ini（由其 FullPath
+/// 重定向到真正的工作目录）；按解析后的实际位置校验。
 pub fn set_custom_data_dir(dir: Option<&Path>) -> Result<(), String> {
     if let Some(dir) = dir {
-        if !dir.join("client.realm").is_file() {
-            return Err(format!("所选目录中没有 client.realm：{}", dir.display()));
+        let mut slot = CUSTOM_DATA_DIR
+            .lock()
+            .map_err(|_| "配置锁中毒".to_string())?;
+        *slot = Some(dir.to_path_buf());
+        // 解析后的工作目录必须存在 client.realm，否则回滚（源目录的残留 realm 不算数）。
+        let resolved = custom_data_dir().map(|base| resolve_working_dir(&base));
+        let ok = resolved
+            .as_ref()
+            .map(|root| root.join("client.realm").is_file())
+            .unwrap_or(false);
+        if !ok {
+            *slot = None;
+            let shown = resolved
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| dir.display().to_string());
+            return Err(format!("解析后的目录中没有 client.realm：{shown}"));
         }
+        return Ok(());
     }
     let mut slot = CUSTOM_DATA_DIR
         .lock()
         .map_err(|_| "配置锁中毒".to_string())?;
-    *slot = dir.map(Path::to_path_buf);
+    *slot = None;
     Ok(())
 }
 
@@ -56,9 +73,19 @@ fn auto_data_root() -> Option<PathBuf> {
     }
 }
 
-/// 当前生效的数据根：手动指定的优先，否则自动检测。
+/// 从基础目录（手动指定或自动检测的数据根）解析实际工作目录：
+/// storage.ini 的 FullPath 无条件优先——迁移存储后 client.realm 与 files/
+/// 都在 FullPath 指向的目录，源目录即使残留旧 client.realm 也禁止使用。
+fn resolve_working_dir(base: &Path) -> PathBuf {
+    read_storage_ini_fullpath(&base.join("storage.ini")).unwrap_or_else(|| base.to_path_buf())
+}
+
+/// 当前生效的工作目录：storage.ini 的 FullPath 无条件优先——
+/// lazer 迁移存储后 client.realm 与 files/ 都在 FullPath 指向的目录，
+/// 原数据目录只剩 storage.ini（及旧残留），一律忽略。
 pub fn lazer_data_root() -> Option<PathBuf> {
-    custom_data_dir().or_else(auto_data_root)
+    let base = custom_data_dir().or_else(auto_data_root)?;
+    Some(resolve_working_dir(&base))
 }
 
 /// 当前数据根是否来自手动指定。
@@ -84,10 +111,9 @@ fn read_storage_ini_fullpath(storage_ini: &Path) -> Option<PathBuf> {
 }
 
 /// osu!lazer 的文件存储根（files/ 内容寻址目录的父目录）：
-/// 优先取 storage.ini 的 FullPath，否则回退到数据根。
+/// 与工作目录一致（storage.ini 的 FullPath 已在 lazer_data_root 内生效）。
 pub fn lazer_files_root() -> Option<PathBuf> {
-    let data_root = lazer_data_root()?;
-    read_storage_ini_fullpath(&data_root.join("storage.ini")).or(Some(data_root))
+    lazer_data_root()
 }
 
 #[derive(Debug, Serialize)]
@@ -201,6 +227,31 @@ pub fn read_cover(hash: String) -> Result<Option<String>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+
+    /// storage.ini 的 FullPath 无条件优先：源目录即使残留 client.realm 也禁止使用。
+    #[test]
+    fn ini_fullpath_overrides_source_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("source");
+        fs::create_dir_all(&source).unwrap();
+        // 源目录里留着旧 realm 和 files，模拟迁移后的残留。
+        fs::write(source.join("client.realm"), b"old").unwrap();
+        fs::write(source.join("storage.ini"), "FullPath = D:\\osu-moved\n").unwrap();
+        assert_eq!(resolve_working_dir(&source), PathBuf::from("D:\\osu-moved"));
+    }
+
+    /// 没有 storage.ini 或 FullPath 为空时，工作目录就是基础目录本身。
+    #[test]
+    fn without_ini_base_dir_wins() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path().join("plain");
+        fs::create_dir_all(&base).unwrap();
+        assert_eq!(resolve_working_dir(&base), base);
+
+        fs::write(base.join("storage.ini"), "FullPath =\n").unwrap();
+        assert_eq!(resolve_working_dir(&base), base);
+    }
 
     /// 默认目录在每个平台都指向 lazer 的官方数据位置。
     #[test]
@@ -225,11 +276,11 @@ mod tests {
         }
     }
 
-    /// 本机装有 lazer 时，自动检测应直接命中含 client.realm 的目录。
+    /// 本机装有 lazer 时，实际工作目录（含 storage.ini 重定向）应含 client.realm。
     #[test]
     #[ignore = "需要本机安装 osu!lazer"]
     fn auto_detect_finds_realm() {
-        assert!(auto_data_root().unwrap().join("client.realm").is_file());
+        assert!(lazer_data_root().unwrap().join("client.realm").is_file());
     }
 }
 

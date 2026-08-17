@@ -785,7 +785,8 @@ function renderSidebar() {
 async function load() {
   try {
     const status = await invoke<LazerStatus>("detect_lazer");
-    els.lazerPath.textContent = status.dataRoot ?? "未检测到";
+    // 设置页显示实际文件存储目录：storage.ini 的 FullPath 存在时以它为准。
+    els.lazerPath.textContent = status.filesRoot ?? status.dataRoot ?? "未检测到";
     els.resetDir.hidden = !status.usingCustom;
     filesRoot = status.filesRoot;
     if (!status.realmPath) {
@@ -1109,6 +1110,7 @@ async function runDedupe(dryRun: boolean) {
     const result = await invoke<{
       dryRun: boolean;
       cancelled: boolean;
+      lazerFilesRoot: string;
       candidateCount: number;
       reclaimableSize: number;
       linkedCount: number;
@@ -1123,6 +1125,7 @@ async function runDedupe(dryRun: boolean) {
     });
     const lines: string[] = [];
     if (result.cancelled) lines.push("已终止。");
+    lines.push(`lazer 文件存储：${result.lazerFilesRoot}`);
     if (result.dryRun) {
       if (result.candidateCount > 0) {
         lines.push(
@@ -1780,7 +1783,7 @@ els.lazerBrowse.addEventListener("click", changeDir);
 els.lazerAuto.addEventListener("click", async () => {
   try {
     const status = await invoke<LazerStatus>("set_lazer_data_dir", { path: null });
-    els.lazerPath.textContent = status.dataRoot ?? "未检测到";
+    els.lazerPath.textContent = status.filesRoot ?? status.dataRoot ?? "未检测到";
     try {
       localStorage.removeItem("lazer-dir");
     } catch {

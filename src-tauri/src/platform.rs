@@ -123,6 +123,43 @@ pub fn set_lazer_data_dir(path: Option<String>) -> Result<LazerStatus, String> {
     Ok(detect_lazer())
 }
 
+/// 自动扫描 osu!stable 安装目录候选（与 OPP 的 stable_install_candidates 同逻辑）：
+/// Windows 走注册表卸载信息 + `%LOCALAPPDATA%\osu!`；Linux 为 osu-wine 的
+/// `~/.local/share/osu-wine/osu!`。逐个校验 Songs 目录存在后返回。
+#[tauri::command]
+pub fn detect_stable_dir() -> Vec<String> {
+    let candidates = stable_install_candidates();
+    candidates
+        .into_iter()
+        .filter(|dir| dir.join("Songs").is_dir() || dir.join("osu!.db").is_file())
+        .map(|dir| dir.display().to_string())
+        .collect()
+}
+
+fn stable_install_candidates() -> Vec<PathBuf> {
+    #[cfg(windows)]
+    {
+        let mut candidates = Vec::new();
+        if let Some(install) = registry_install() {
+            candidates.push(install);
+        }
+        if let Some(local) = env::var_os("LOCALAPPDATA").map(PathBuf::from) {
+            candidates.push(local.join("osu!"));
+        }
+        candidates
+    }
+    #[cfg(not(windows))]
+    {
+        // osu-wine 方案的实际安装目录是 `osu-wine/osu!`。
+        let data = env::var_os("XDG_DATA_HOME")
+            .map(PathBuf::from)
+            .or_else(|| home_dir().map(|home| home.join(".local").join("share")));
+        data.into_iter()
+            .map(|data| data.join("osu-wine").join("osu!"))
+            .collect()
+    }
+}
+
 /// files/ 内容寻址存储中的 blob 相对路径：`x/xy/<sha256>`。
 pub fn blob_relative_path(hash: &str) -> String {
     if hash.len() >= 2 {
@@ -197,4 +234,43 @@ mod tests {
     fn auto_detect_finds_realm() {
         assert!(auto_data_root().unwrap().join("client.realm").is_file());
     }
+}
+
+#[cfg(windows)]
+fn registry_install() -> Option<PathBuf> {
+    use winreg::{
+        RegKey,
+        enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE},
+    };
+
+    const KEYS: [&str; 2] = [
+        r"Software\Microsoft\Windows\CurrentVersion\Uninstall",
+        r"Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall",
+    ];
+
+    for hive in [HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE] {
+        let hive = RegKey::predef(hive);
+        for key_name in KEYS {
+            let Ok(uninstall) = hive.open_subkey(key_name) else {
+                continue;
+            };
+            for subkey_name in uninstall.enum_keys().flatten() {
+                let Ok(subkey) = uninstall.open_subkey(subkey_name) else {
+                    continue;
+                };
+                let Ok(display_name) = subkey.get_value::<String, _>("DisplayName") else {
+                    continue;
+                };
+                if !display_name.eq_ignore_ascii_case("osu!") {
+                    continue;
+                }
+                if let Ok(path) = subkey.get_value::<String, _>("InstallLocation") {
+                    if !path.trim().is_empty() {
+                        return Some(PathBuf::from(path.trim().trim_matches('"')));
+                    }
+                }
+            }
+        }
+    }
+    None
 }

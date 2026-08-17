@@ -15,6 +15,7 @@ pub fn run() {
             platform::detect_lazer,
             platform::set_lazer_data_dir,
             platform::read_cover,
+            platform::detect_stable_dir,
             lazer_realm::list_library,
             exporter::export_sets,
             exporter::export_skins,

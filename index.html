@@ -185,13 +185,9 @@
                   中内容完全一致的重复文件替换为指向 stable 的硬链接，释放重复占用的空间。
                   先关闭 osu!lazer 再执行。
                 </div>
-                <div class="export-format-row">
-                  <label class="toggle"
-                    ><input id="dedupe-dry-run" type="checkbox" checked /> 仅预览（试运行，不实际修改）</label
-                  >
-                </div>
                 <div class="modal-actions">
                   <button id="dedupe-run" class="primary">开始扫描</button>
+                  <button id="dedupe-execute" class="primary" hidden>执行替换</button>
                 </div>
                 <div id="dedupe-progress" hidden>
                   <div id="dedupe-progress-text"></div>
@@ -219,11 +215,13 @@
                 <div class="setting-item setting-dir-row">
                   <span>lazer 目录</span>
                   <button id="lazer-browse" class="compact">浏览…</button>
+                  <button id="lazer-auto" class="compact">自动扫描</button>
                 </div>
                 <div id="lazer-dir-display" class="setting-desc dir-display">未检测到</div>
                 <div class="setting-item setting-dir-row">
                   <span>stable 目录</span>
                   <button id="stable-browse" class="compact">浏览…</button>
+                  <button id="stable-auto" class="compact">自动扫描</button>
                 </div>
                 <div id="stable-dir-display" class="setting-desc dir-display">未设置</div>
               </div>

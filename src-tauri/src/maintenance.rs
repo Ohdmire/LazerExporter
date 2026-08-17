@@ -24,6 +24,16 @@ use crate::platform;
 /// 取消标志：同一时间只应有一个去重任务。
 static CANCELLED: AtomicBool = AtomicBool::new(false);
 
+/// 最近一次扫描的结果与匹配对：先扫描预览、确认后一键执行，无需重复扫描。
+static SCAN_CACHE: Mutex<Option<ScanCache>> = Mutex::new(None);
+
+#[derive(Default)]
+struct ScanCache {
+    result: DedupeResult,
+    /// (lazer 文件, stable 文件, 大小)
+    pairs: Vec<(PathBuf, PathBuf, u64)>,
+}
+
 /// 单个失败条目的展示上限，避免异常文件系统撑爆结果。
 const MAX_FAILURES: usize = 50;
 
@@ -148,6 +158,37 @@ pub fn cancel_dedupe() {
 
 fn run(app: &tauri::AppHandle, stable_root: PathBuf, dry_run: bool) -> Result<DedupeResult, String> {
     CANCELLED.store(false, Ordering::Relaxed);
+
+    // 执行模式：有缓存（刚扫描过）时直接进入替换阶段，不重复扫描/哈希。
+    if !dry_run {
+        if let Ok(mut guard) = SCAN_CACHE.lock() {
+            if let Some(cache) = guard.take() {
+                let mut result = cache.result;
+                result.dry_run = false;
+                let reporter = ProgressReporter::new(app);
+                let total = cache.pairs.len();
+                reporter.emit("link", 0, total, true);
+                for (index, (lazer, stable, size)) in cache.pairs.into_iter().enumerate() {
+                    if CANCELLED.load(Ordering::Relaxed) {
+                        result.cancelled = true;
+                        return Ok(result);
+                    }
+                    reporter.emit("link", index, total, false);
+                    let file = LazerFile { hash: String::new(), size, path: lazer, volume: 0 };
+                    match link_replace(&file, &stable) {
+                        Ok(()) => {
+                            result.linked_count += 1;
+                            result.linked_size += size;
+                        }
+                        Err(message) => record_failure(&mut result, &file.path, message),
+                    }
+                }
+                reporter.emit("link", total, total, true);
+                return Ok(result);
+            }
+        }
+    }
+
     let reporter = ProgressReporter::new(app);
     let mut result = DedupeResult {
         dry_run,
@@ -161,11 +202,11 @@ fn run(app: &tauri::AppHandle, stable_root: PathBuf, dry_run: bool) -> Result<De
     if !stable_root.is_dir() {
         return Err("所选 stable 目录不存在".into());
     }
-    // 统一入口：选的是 stable 根目录时自动定位 Songs 子目录。
-    let stable_root = match stable_root.join("Songs") {
-        songs if songs.is_dir() => songs,
-        _ => stable_root,
-    };
+    // 只处理 Songs 谱面目录（皮肤/回放等其他文件不参与压缩），没有则报错。
+    let stable_root = stable_root.join("Songs");
+    if !stable_root.is_dir() {
+        return Err("所选 stable 目录下没有 Songs 谱面目录".into());
+    }
     result.lazer_files_root = lazer_root.display().to_string();
     result.stable_root = stable_root.display().to_string();
 
@@ -232,20 +273,27 @@ fn run(app: &tauri::AppHandle, stable_root: PathBuf, dry_run: bool) -> Result<De
     }
     result.hashed_stable_count = candidates.len() as u64;
 
-    // 3. 计算候选文件的 SHA-256，与 lazer 文件名（即哈希）匹配。
+    // 3. 并行计算候选文件的 SHA-256（多线程加速），与 lazer 文件名（即哈希）匹配。
     reporter.emit("hash", 0, candidates.len(), true);
     let processed = AtomicUsize::new(0);
-    let mut by_hash: HashMap<String, PathBuf> = HashMap::new();
-    for (path, size) in &candidates {
-        if CANCELLED.load(Ordering::Relaxed) {
-            result.cancelled = true;
-            return Ok(result);
-        }
-        if let Ok(hash) = hash_file_sized(path, *size) {
-            by_hash.insert(hash, path.clone());
-        }
-        let done = processed.fetch_add(1, Ordering::Relaxed) + 1;
-        reporter.emit("hash", done, candidates.len(), false);
+    use rayon::prelude::*;
+    let by_hash: HashMap<String, PathBuf> = candidates
+        .par_iter()
+        .filter_map(|(path, size)| {
+            if CANCELLED.load(Ordering::Relaxed) {
+                return None;
+            }
+            let pair = hash_file_sized(path, *size)
+                .ok()
+                .map(|hash| (hash, path.clone()));
+            let done = processed.fetch_add(1, Ordering::Relaxed) + 1;
+            reporter.emit("hash", done, candidates.len(), false);
+            pair
+        })
+        .collect();
+    if CANCELLED.load(Ordering::Relaxed) {
+        result.cancelled = true;
+        return Ok(result);
     }
     reporter.emit("hash", candidates.len(), candidates.len(), true);
 
@@ -268,7 +316,18 @@ fn run(app: &tauri::AppHandle, stable_root: PathBuf, dry_run: bool) -> Result<De
     result.reclaimable_size = pairs_on_volume.iter().map(|(file, _)| file.size).sum();
     result.skipped_cross_volume_count = cross_volume.len() as u64;
     result.skipped_cross_volume_size = cross_volume.iter().map(|(file, _)| file.size).sum();
-    if dry_run || pairs_on_volume.is_empty() {
+    if pairs_on_volume.is_empty() {
+        return Ok(result);
+    }
+    if dry_run {
+        // 扫描（预览）完成：缓存匹配对，等执行按钮一键替换。
+        let pairs = pairs_on_volume
+            .iter()
+            .map(|(file, stable)| (file.path.clone(), stable.clone(), file.size))
+            .collect();
+        if let Ok(mut guard) = SCAN_CACHE.lock() {
+            *guard = Some(ScanCache { result: result.clone(), pairs });
+        }
         return Ok(result);
     }
 

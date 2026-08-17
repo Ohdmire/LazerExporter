@@ -86,11 +86,13 @@ const els = {
   stablePath: document.getElementById("stable-dir-display")!,
   lazerPath: document.getElementById("lazer-dir-display")!,
   lazerBrowse: document.getElementById("lazer-browse")!,
+  lazerAuto: document.getElementById("lazer-auto")!,
   spaceStableDir: document.getElementById("space-stable-dir")!,
   collectionsStableDir: document.getElementById("collections-stable-dir")!,
   stableBrowse: document.getElementById("stable-browse")!,
-  dedupeDryRun: document.getElementById("dedupe-dry-run") as HTMLInputElement,
+  stableAuto: document.getElementById("stable-auto")!,
   dedupeRun: document.getElementById("dedupe-run") as HTMLButtonElement,
+  dedupeExecute: document.getElementById("dedupe-execute") as HTMLButtonElement,
   dedupeProgress: document.getElementById("dedupe-progress")!,
   dedupeProgressText: document.getElementById("dedupe-progress-text")!,
   dedupeProgressFill: document.getElementById("dedupe-progress-fill")!,
@@ -1063,13 +1065,14 @@ const DEDUPE_PHASES: Record<string, string> = {
 
 let dedupeRunning = false;
 
-async function runDedupe() {
+async function runDedupe(dryRun: boolean) {
   if (dedupeRunning) return;
   const stableRoot = els.stablePath.textContent.trim();
   if (stableRoot === "未设置") return;
   if (!stableRoot) return;
   dedupeRunning = true;
   els.dedupeRun.disabled = true;
+  els.dedupeExecute.disabled = true;
   els.dedupeProgress.hidden = false;
   els.dedupeStop.hidden = false;
   els.dedupeResult.textContent = "";
@@ -1089,18 +1092,27 @@ async function runDedupe() {
       alreadyLinkedSize: number;
     }>("dedupe_lazer_files", {
       stableRoot,
-      dryRun: els.dedupeDryRun.checked,
+      dryRun,
     });
     const lines: string[] = [];
     if (result.cancelled) lines.push("已终止。");
     if (result.dryRun) {
-      lines.push(
-        `预览：${result.candidateCount} 个文件与 stable 完全重复，可释放约 ${fmtSize(result.reclaimableSize)}。`,
-      );
+      if (result.candidateCount > 0) {
+        lines.push(
+          `扫描完成：${result.candidateCount} 个文件与 stable 完全重复，可释放约 ${fmtSize(result.reclaimableSize)}。`,
+        );
+        lines.push("点击“执行替换”开始硬链接替换（再次扫描将重新计算）。");
+        els.dedupeExecute.hidden = false;
+        els.dedupeExecute.disabled = false;
+      } else {
+        lines.push("扫描完成：没有发现与 stable 重复的文件。");
+        els.dedupeExecute.hidden = true;
+      }
     } else {
       lines.push(
-        `已替换 ${result.linkedCount} 个文件，释放 ${fmtSize(result.linkedSize)}。`,
+        `执行完成：已替换 ${result.linkedCount} 个文件，释放 ${fmtSize(result.linkedSize)}。`,
       );
+      els.dedupeExecute.hidden = true;
     }
     if (result.skippedCrossVolumeCount > 0) {
       lines.push(
@@ -1116,6 +1128,7 @@ async function runDedupe() {
   } finally {
     dedupeRunning = false;
     els.dedupeRun.disabled = false;
+    els.dedupeExecute.disabled = false;
     els.dedupeStop.hidden = true;
   }
 }
@@ -1716,7 +1729,11 @@ els.selectAllCollections.addEventListener("click", () => {
   renderSidebar();
   render();
 });
-els.dedupeRun.addEventListener("click", runDedupe);
+els.dedupeRun.addEventListener("click", () => {
+  els.dedupeExecute.hidden = true;
+  runDedupe(true);
+});
+els.dedupeExecute.addEventListener("click", () => runDedupe(false));
 els.dedupeStop.addEventListener("click", async () => {
   try {
     await invoke("cancel_dedupe");
@@ -1731,6 +1748,50 @@ els.progressWrap.addEventListener("click", (event) => {
 });
 els.changeDir.addEventListener("click", changeDir);
 els.lazerBrowse.addEventListener("click", changeDir);
+// lazer 自动扫描：清除手动指定，回到默认目录检测逻辑并重新加载。
+els.lazerAuto.addEventListener("click", async () => {
+  try {
+    const status = await invoke<LazerStatus>("set_lazer_data_dir", { path: null });
+    els.lazerPath.textContent = status.dataRoot ?? "未检测到";
+    try {
+      localStorage.removeItem("lazer-dir");
+    } catch {
+      /* 忽略 */
+    }
+    if (!status.realmPath) {
+      setStatus(`自动扫描未找到 client.realm（检测目录：${status.autoDataRoot ?? "?"}）`, false);
+      return;
+    }
+    setStatus(`已自动扫描到 lazer 目录：${status.dataRoot}`, true);
+    library = null;
+    els.list.innerHTML = "";
+    await load();
+  } catch (error) {
+    setStatus(`自动扫描失败：${error}`, false);
+  }
+});
+els.stableAuto.addEventListener("click", async () => {
+  try {
+    const found = await invoke<string[]>("detect_stable_dir");
+    if (!found.length) {
+      setStatus("未扫描到 osu!stable 安装目录（Linux 查找 osu-wine 位置，Windows 查找注册表/LOCALAPPDATA）", false);
+      return;
+    }
+    els.stablePath.textContent = found[0];
+    try {
+      localStorage.setItem("stable-dir", found[0]);
+    } catch {
+      /* 忽略持久化失败 */
+    }
+    updateStableDirDisplays();
+    setStatus(
+      `已自动扫描到 stable 目录：${found[0]}${found.length > 1 ? `（另有 ${found.length - 1} 个候选）` : ""}`,
+      true,
+    );
+  } catch (error) {
+    setStatus(`自动扫描失败：${error}`, false);
+  }
+});
 els.stableBrowse.addEventListener("click", async () => {
   const dir = await open({ directory: true, title: "选择 osu!stable 目录（根目录或 Songs 均可）" });
   if (!dir) return;

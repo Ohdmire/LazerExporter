@@ -68,13 +68,42 @@ const RANKS = ["", "SS", "S", "A", "B", "C", "D"];
 const els = {
   status: document.getElementById("lazer-status")!,
   changeDir: document.getElementById("change-dir")!,
+  pageNav: document.getElementById("page-nav")!,
+  pageExport: document.getElementById("page-export")!,
+  pageSpace: document.getElementById("page-space")!,
+  pageCollections: document.getElementById("page-collections")!,
+  collectionLoad: document.getElementById("collection-load")!,
+  collectionSummary: document.getElementById("collection-summary")!,
+  lazerCollectionList: document.getElementById("lazer-collection-list")!,
+  stableCollectionList: document.getElementById("stable-collection-list")!,
+  collectionSync: document.getElementById("collection-sync")!,
+  collectionImportPath: document.getElementById("collection-import-path") as HTMLInputElement,
+  collectionImportBrowse: document.getElementById("collection-import-browse")!,
+  collectionImportAppend: document.getElementById("collection-import-append")!,
+  collectionImportReplace: document.getElementById("collection-import-replace")!,
+  collectionResult: document.getElementById("collection-result")!,
+  dupFilter: document.getElementById("dup-filter")!,
+  diskUsageBtn: document.getElementById("disk-usage-btn")!,
+  usageContent: document.getElementById("usage-content")!,
+  selectAllCollections: document.getElementById("select-all-collections")!,
+  stablePath: document.getElementById("stable-dir-display")!,
+  lazerPath: document.getElementById("lazer-dir-display")!,
+  lazerBrowse: document.getElementById("lazer-browse")!,
+  spaceStableDir: document.getElementById("space-stable-dir")!,
+  collectionsStableDir: document.getElementById("collections-stable-dir")!,
+  stableBrowse: document.getElementById("stable-browse")!,
+  dedupeDryRun: document.getElementById("dedupe-dry-run") as HTMLInputElement,
+  dedupeRun: document.getElementById("dedupe-run") as HTMLButtonElement,
+  dedupeProgress: document.getElementById("dedupe-progress")!,
+  dedupeProgressText: document.getElementById("dedupe-progress-text")!,
+  dedupeProgressFill: document.getElementById("dedupe-progress-fill")!,
+  dedupeStop: document.getElementById("dedupe-stop")!,
+  dedupeResult: document.getElementById("dedupe-result")!,
   resetDir: document.getElementById("reset-dir")!,
   navSearch: document.getElementById("nav-search") as HTMLInputElement,
   unicodeMode: document.getElementById("unicode-mode") as HTMLInputElement,
   perfMode: document.getElementById("perf-mode") as HTMLInputElement,
-  settingsToggle: document.getElementById("settings-toggle")!,
-  settingsModal: document.getElementById("settings-modal")!,
-  settingsClose: document.getElementById("settings-close")!,
+  pageSettings: document.getElementById("page-settings")!,
   invertSelect: document.getElementById("invert-select")!,
   collectionChips: document.getElementById("collection-chips")!,
   sortKey: document.getElementById("sort-key") as HTMLSelectElement,
@@ -116,11 +145,26 @@ const coverBySetId = new Map<string, string>();
 // 当前收藏夹内的加入顺序（id → 序号），供“按收藏顺序排序”。
 const collectionOrderById = new Map<string, number>();
 let tab: Tab = "beatmaps";
+// 当前主页面：export（导出列表）/ space（空间管理）/ collections（集合管理）。
+let page: "export" | "space" | "collections" | "settings" = "export";
+// 仅显示重复导入的谱面集。
+let dupFilterOn = false;
+
+function switchPage(next: "export" | "space" | "collections" | "settings") {
+  page = next;
+  els.pageExport.hidden = next !== "export";
+  els.pageSpace.hidden = next !== "space";
+  els.pageCollections.hidden = next !== "collections";
+  els.pageSettings.hidden = next !== "settings";
+  els.pageNav
+    .querySelectorAll(".chip")
+    .forEach((chip) => chip.classList.toggle("active", (chip as HTMLElement).dataset.page === next));
+  // 侧栏的收藏夹导航只在导出页显示。
+  els.sidebar.style.display = next === "export" ? "" : "none";
+}
 // beatmaps 子分类筛选：null = 全部，"__none__" = 未加入任何收藏夹，
 // Set = 多选的收藏夹名集合（列表显示其并集）。
 let collectionFilter: "__none__" | Set<string> | null = null;
-// 谱面分类下的收藏夹列表是否展开。
-let beatmapsExpanded = true;
 // 排序方式（key 见 SORT_OPTIONS，desc 为降序）。
 let sortKey = "date_added";
 let sortDesc = true;
@@ -163,6 +207,14 @@ function escapeHtml(text: string): string {
   const div = document.createElement("div");
   div.textContent = text;
   return div.innerHTML;
+}
+
+/** 把当前 stable 目录同步显示到相关页面与设置页。 */
+function updateStableDirDisplays() {
+  const path = els.stablePath.textContent.trim();
+  els.stablePath.textContent = path || "未设置";
+  els.spaceStableDir.textContent = path ? `当前 stable 目录：${path}` : "未设置 stable 目录（在设置页选择）";
+  els.collectionsStableDir.textContent = els.spaceStableDir.textContent;
 }
 
 function setStatus(text: string, ok: boolean | null = null) {
@@ -414,8 +466,15 @@ function coverUrl(hash: string): string {
 
 /** 懒加载：封面进入可视区后才设置 src（IntersectionObserver）。 */
 let coverObserver: IntersectionObserver | null = null;
-function observeCovers() {
-  coverObserver?.disconnect();
+function observeCoversIn(container: HTMLElement) {
+  ensureCoverObserver();
+  container.querySelectorAll("img.cover[data-src]").forEach((img) => {
+    coverObserver!.observe(img);
+  });
+}
+
+function ensureCoverObserver() {
+  if (coverObserver) return;
   coverObserver = new IntersectionObserver(
     (entries) => {
       for (const entry of entries) {
@@ -431,13 +490,18 @@ function observeCovers() {
     },
     { rootMargin: "200px" },
   );
+}
+
+function observeCovers() {
+  ensureCoverObserver();
   els.list.querySelectorAll("img.cover[data-src]").forEach((img) => {
     coverObserver!.observe(img);
   });
 }
 
 // asset 协议加载失败时的兜底：走 IPC 读 blob 转 data URL（error 不冒泡，需捕获）。
-els.list.addEventListener(
+// 挂在 document 上可同时覆盖导出列表与集合管理页的封面。
+document.addEventListener(
   "error",
   (event) => {
     const img = event.target as HTMLImageElement;
@@ -497,6 +561,7 @@ function render() {
   const matcher = makeMatcher();
   const sortValue = SORT_OPTIONS[tab][sortKey][1];
   els.rulesetFilter.hidden = tab === "skins";
+  els.dupFilter.classList.toggle("active", dupFilterOn);
   renderCollectionChips();
   if (tab === "beatmaps") {
     const criteria = parseQuery(els.search.value);
@@ -523,10 +588,23 @@ function render() {
               (s) => !library!.collections.some((c) => c.set_ids.includes(s.id)),
             )
           : library.sets;
+    // 重复筛选：同上架编号（>0）在库中出现多次的谱面集。
+    let dupCounts: Map<number, number> | null = null;
+    if (dupFilterOn) {
+      dupCounts = new Map();
+      for (const set of library.sets) {
+        if (set.online_id > 0) {
+          dupCounts.set(set.online_id, (dupCounts.get(set.online_id) ?? 0) + 1);
+        }
+      }
+    }
     const items = sortCurrent(
       collection
         .filter((s) =>
           rulesetFilter === "" ? true : s.beatmaps.some((b) => b.ruleset === rulesetFilter),
+        )
+        .filter((s) =>
+          dupCounts ? s.online_id > 0 && (dupCounts.get(s.online_id) ?? 0) > 1 : true,
         )
         .filter((s) => setMatches(s, criteria)),
       (s) => sortValue(s as never),
@@ -543,7 +621,10 @@ function render() {
           `${s.beatmaps.length} 难度`,
           fmtSize(setTotalSize(s)),
         ];
-        if (s.online_id > 0) parts.push(`#${s.online_id}`);
+        if (s.online_id > 0) {
+          const dupCount = dupCounts?.get(s.online_id) ?? 0;
+          parts.push(dupCount > 1 ? `#${s.online_id}(重复×${dupCount})` : `#${s.online_id}`);
+        }
         // 默认显示谱面集的难度范围：min ~ max，各自按星级配色渲染成两个徽章。
         const stars = s.beatmaps.map((b) => b.star_rating).filter((v) => v > 0);
         if (stars.length) {
@@ -626,16 +707,16 @@ function renderSidebar() {
   document.querySelectorAll("#sidebar .nav-item.category").forEach((btn) => {
     const el = btn as HTMLElement;
     el.classList.toggle("active", el.dataset.tab === tab);
-    el.querySelector(".arrow")!.textContent = beatmapsExpanded ? "▾" : "▸";
+    el.querySelector(".arrow")!.textContent = "▾";
   });
   document
     .querySelectorAll("#sidebar .nav-item:not(.category):not(.sub)")
     .forEach((btn) => btn.classList.toggle("active", (btn as HTMLElement).dataset.tab === tab));
   const nav = els.collectionNav;
   nav.innerHTML = "";
-  const expanded = tab === "beatmaps" && beatmapsExpanded;
+  const expanded = tab === "beatmaps";
   nav.style.display = expanded ? "flex" : "none";
-  els.navSearch.style.display = expanded ? "" : "none";
+  els.selectAllCollections.style.display = tab === "beatmaps" ? "" : "none";
   if (!library || !expanded) return;
 
   const lib = library;
@@ -711,6 +792,7 @@ async function load() {
   setStatus("正在读取 client.realm…");
   try {
     const status = await invoke<LazerStatus>("detect_lazer");
+    els.lazerPath.textContent = status.dataRoot ?? "未检测到";
     els.resetDir.hidden = !status.usingCustom;
     filesRoot = status.filesRoot;
     if (!status.realmPath) {
@@ -949,6 +1031,401 @@ function setProgress(fraction: number, text: string) {
   els.progressFill.style.width = `${Math.round(fraction * 100)}%`;
 }
 
+
+// ---- 空间维护工具：磁盘占用统计 / 与 stable 去重压缩 ----
+
+async function showDiskUsage() {
+  els.usageContent.textContent = "正在统计…";
+  try {
+    const usage = await invoke<{
+      path: string;
+      totalSize: number;
+      uniqueSize: number;
+      fileCount: number;
+    }>("get_lazer_disk_usage");
+    const shared = usage.totalSize - usage.uniqueSize;
+    els.usageContent.innerHTML = `
+      <div class="usage-row"><span>目录</span><span>${escapeHtml(usage.path)}</span></div>
+      <div class="usage-row"><span>文件数</span><span>${usage.fileCount.toLocaleString()}</span></div>
+      <div class="usage-row"><span>总大小（逻辑）</span><span>${fmtSize(usage.totalSize)}</span></div>
+      <div class="usage-row"><span>实际占用（排除硬链接）</span><span>${fmtSize(usage.uniqueSize)}</span></div>
+      <div class="usage-row"><span>与 stable 共享（硬链接）</span><span>${fmtSize(shared)}</span></div>
+      <div class="setting-desc">从 stable 导入的文件以硬链接存在，删除 lazer 目录不会释放共享部分的空间。</div>`;
+  } catch (error) {
+    els.usageContent.textContent = `统计失败：${error}`;
+  }
+}
+
+const DEDUPE_PHASES: Record<string, string> = {
+  "scan-lazer": "扫描 lazer 文件存储",
+  "scan-stable": "扫描 stable 谱面目录",
+  hash: "计算候选文件 SHA-256",
+  link: "替换为硬链接",
+};
+
+let dedupeRunning = false;
+
+async function runDedupe() {
+  if (dedupeRunning) return;
+  const stableRoot = els.stablePath.textContent.trim();
+  if (stableRoot === "未设置") return;
+  if (!stableRoot) return;
+  dedupeRunning = true;
+  els.dedupeRun.disabled = true;
+  els.dedupeProgress.hidden = false;
+  els.dedupeResult.textContent = "";
+  els.dedupeProgressFill.style.width = "0%";
+  els.dedupeProgressText.textContent = "准备扫描…";
+  try {
+    const result = await invoke<{
+      dryRun: boolean;
+      cancelled: boolean;
+      candidateCount: number;
+      reclaimableSize: number;
+      linkedCount: number;
+      linkedSize: number;
+      skippedCrossVolumeCount: number;
+      skippedCrossVolumeSize: number;
+      failedCount: number;
+      alreadyLinkedSize: number;
+    }>("dedupe_lazer_files", {
+      stableRoot,
+      dryRun: els.dedupeDryRun.checked,
+    });
+    const lines: string[] = [];
+    if (result.cancelled) lines.push("已终止。");
+    if (result.dryRun) {
+      lines.push(
+        `预览：${result.candidateCount} 个文件与 stable 完全重复，可释放约 ${fmtSize(result.reclaimableSize)}。`,
+      );
+    } else {
+      lines.push(
+        `已替换 ${result.linkedCount} 个文件，释放 ${fmtSize(result.linkedSize)}。`,
+      );
+    }
+    if (result.skippedCrossVolumeCount > 0) {
+      lines.push(
+        `${result.skippedCrossVolumeCount} 个因跨分区无法硬链接（${fmtSize(result.skippedCrossVolumeSize)}）。`,
+      );
+    }
+    if (result.failedCount > 0) lines.push(`${result.failedCount} 个失败。`);
+    els.dedupeResult.textContent = lines.join(" ");
+    els.dedupeProgressText.textContent = "完成";
+    els.dedupeProgressFill.style.width = "100%";
+  } catch (error) {
+    els.dedupeResult.textContent = `失败:${error}`;
+  } finally {
+    dedupeRunning = false;
+    els.dedupeRun.disabled = false;
+  }
+}
+
+
+// ---- 集合管理：lazer 收藏夹 ↔ stable collection.db（osu-db 读写 + osu!.db 定位）----
+
+interface BeatmapRef {
+  md5: string;
+  label: string;
+  matched: boolean;
+  cover: string | null;
+  stableCover: string | null;
+}
+interface LazerCollectionInfo {
+  name: string;
+  matchedInStable: number;
+  beatmaps: BeatmapRef[];
+}
+interface StableCollectionInfo {
+  name: string;
+  matchedInLazer: number;
+  sampleFolder: string;
+  beatmaps: BeatmapRef[];
+}
+interface CollectionPageData {
+  stableDir: string;
+  osuDbBeatmaps: number;
+  lazerCollections: LazerCollectionInfo[];
+  stableCollections: StableCollectionInfo[];
+}
+
+/** 渲染可展开的收藏夹表格：集合行（全选框）+ 展开后的谱面行（单张勾选、
+ * shift 范围选择）。返回选择状态与全选/反选/取消 控制器。 */
+interface ColumnController {
+  selection: Map<string, Set<string>>;
+  selectAll: () => void;
+  invert: () => void;
+  clear: () => void;
+}
+
+function renderCollectionTable(
+  container: HTMLElement,
+  collections: { name: string; beatmaps: BeatmapRef[] }[],
+): ColumnController {
+  container.innerHTML = "";
+  const selection = new Map<string, Set<string>>();
+  let lastChecked: string | null = null;
+  // shift 集合级选择：上次点击的收藏夹名 与 集合名→DOM块 映射。
+  let lastCollectionName: string | null = null;
+  const blocksByName = new Map<string, HTMLElement>();
+
+  const syncMd5 = (box: HTMLInputElement) => {
+    const entry = selection.get(box.dataset.collection!);
+    if (!entry) return;
+    if (box.checked) entry.add(box.dataset.md5!);
+    else entry.delete(box.dataset.md5!);
+  };
+
+  for (const collection of collections) {
+    const block = document.createElement("div");
+    block.className = "collection-block";
+
+    const header = document.createElement("div");
+    header.className = "row slim collection-head";
+    header.innerHTML = `
+      <input type="checkbox" checked />
+      <span class="arrow">▸</span>
+      <div class="meta">
+        <div class="title">${escapeHtml(collection.name)}</div>
+        <div class="sub">${collection.beatmaps.length} 张谱面</div>
+      </div>`;
+    block.appendChild(header);
+
+    const beatmapList = document.createElement("div");
+    beatmapList.className = "collection-beatmaps";
+    beatmapList.style.display = "none";
+    for (const beatmap of collection.beatmaps) {
+      const row = document.createElement("div");
+      row.className = "row slim beatmap-row";
+      // 封面：lazer blob（可用 IPC 兜底）或 stable 谱面集文件夹里的图片（绝对路径直读）。
+      let cover = "";
+      if (!perfMode) {
+        if (beatmap.cover) {
+          cover = `<img class="cover" data-src="${coverUrl(beatmap.cover)}" data-hash="${beatmap.cover}" alt="" />`;
+        } else if (beatmap.stableCover) {
+          cover = `<img class="cover" data-src="${convertFileSrc(beatmap.stableCover)}" alt="" />`;
+        }
+      }
+      row.innerHTML = `
+        <input type="checkbox" data-md5="${beatmap.md5}" data-collection="${escapeHtml(collection.name)}" checked />
+        ${cover}
+        <div class="meta">
+          <div class="title">${escapeHtml(beatmap.label || beatmap.md5.slice(0, 12))}</div>
+          <div class="sub">${beatmap.matched ? "" : "未在对侧定位到 · "}${beatmap.md5.slice(0, 16)}…</div>
+        </div>`;
+      beatmapList.appendChild(row);
+    }
+    observeCoversIn(beatmapList);
+    block.appendChild(beatmapList);
+    container.appendChild(block);
+    blocksByName.set(collection.name, block);
+
+    selection.set(collection.name, new Set(collection.beatmaps.map((b) => b.md5)));
+
+    const allBox = header.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+    const syncAllBox = () => {
+      const md5s = selection.get(collection.name)!;
+      allBox.checked = md5s.size === collection.beatmaps.length;
+    };
+
+    // 展开/收起：只响应箭头点击，避免与行点击/shift 选择误触。
+    header.querySelector(".arrow")!.addEventListener("click", () => {
+      const expanded = beatmapList.style.display !== "none";
+      beatmapList.style.display = expanded ? "none" : "flex";
+      header.querySelector(".arrow")!.textContent = expanded ? "▸" : "▾";
+    });
+
+    // 集合全选框：复选框指针穿透，点击集合头（非箭头区域）切换全选/全不选。
+    // shift 点击：从上一个点击的收藏夹到当前之间，整段收藏夹统一切换。
+    const setCollectionState = (target: { name: string; beatmaps: BeatmapRef[] }, checked: boolean) => {
+      const md5s = selection.get(target.name)!;
+      md5s.clear();
+      if (checked) target.beatmaps.forEach((b) => md5s.add(b.md5));
+    };
+    const applyHeadState = (target: { name: string; beatmaps: BeatmapRef[] }) => {
+      const md5s = selection.get(target.name)!;
+      const checked = md5s.size > 0;
+      const block = blocksByName.get(target.name);
+      block?.querySelectorAll<HTMLInputElement>('.beatmap-row input[type="checkbox"]').forEach(
+        (box) => (box.checked = checked),
+      );
+      const head = block?.querySelector<HTMLInputElement>('.collection-head input[type="checkbox"]');
+      if (head) head.checked = checked;
+    };
+    header.addEventListener("click", (event) => {
+      if ((event.target as HTMLElement).closest(".arrow")) return;
+      if (event.shiftKey && lastCollectionName) {
+        const order = collections.map((c) => c.name);
+        const from = order.indexOf(lastCollectionName);
+        const to = order.indexOf(collection.name);
+        if (from >= 0 && to >= 0) {
+          // 目标状态：当前收藏夹“是否未全选”→ 整段全选，否则整段取消。
+          const current = selection.get(collection.name)!;
+          const state = current.size !== collection.beatmaps.length;
+          for (const name of order.slice(Math.min(from, to), Math.max(from, to) + 1)) {
+            const target = collections.find((c) => c.name === name)!;
+            setCollectionState(target, state);
+            applyHeadState(target);
+          }
+          return;
+        }
+      }
+      lastCollectionName = collection.name;
+      const md5s = selection.get(collection.name)!;
+      const targetChecked = md5s.size !== collection.beatmaps.length;
+      setCollectionState(collection, targetChecked);
+      applyHeadState(collection);
+    });
+
+    // 复选框直接勾选。
+    beatmapList.addEventListener("change", (event) => {
+      const box = event.target as HTMLInputElement;
+      if (box.tagName !== "INPUT") return;
+      lastChecked = box.dataset.md5 ?? null;
+      syncMd5(box);
+      syncAllBox();
+    });
+
+    // 行点击（含 shift 范围选择）：范围按整列计算，锚点与目标可跨收藏夹。
+    beatmapList.addEventListener("click", (event) => {
+      const row = (event.target as HTMLElement).closest<HTMLElement>(".beatmap-row");
+      if (!row) return;
+      const box = row.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+      const boxes = Array.from(
+        container.querySelectorAll<HTMLInputElement>('.beatmap-row input[type="checkbox"]'),
+      );
+      if (event.shiftKey && lastChecked) {
+        const from = boxes.findIndex((b) => b.dataset.md5 === lastChecked);
+        const to = boxes.indexOf(box);
+        if (from >= 0 && to >= 0) {
+          const state = !box.checked;
+          for (const b of boxes.slice(Math.min(from, to), Math.max(from, to) + 1)) {
+            b.checked = state;
+            syncMd5(b);
+          }
+          // 范围可能跨多个收藏夹：全部集合头重新对齐。
+          for (const block of container.querySelectorAll<HTMLElement>(".collection-block")) {
+            const head = block.querySelector<HTMLInputElement>(
+              '.collection-head input[type="checkbox"]',
+            )!;
+            const first = block.querySelector<HTMLInputElement>(
+              '.beatmap-row input[type="checkbox"]',
+            );
+            if (first?.dataset.collection) {
+              const md5s = selection.get(first.dataset.collection);
+              if (md5s) {
+                const total = Array.from(
+                  block.querySelectorAll<HTMLInputElement>(
+                    '.beatmap-row input[type="checkbox"]',
+                  ),
+                );
+                head.checked = md5s.size > 0 && md5s.size === total.length;
+              }
+            }
+          }
+          return;
+        }
+      }
+      box.checked = !box.checked;
+      lastChecked = box.dataset.md5 ?? null;
+      syncMd5(box);
+      syncAllBox();
+    });
+  }
+
+  const allBoxes = () =>
+    Array.from(container.querySelectorAll<HTMLInputElement>('.beatmap-row input[type="checkbox"]'));
+  const refreshCollectionBoxes = () => {
+    // 联动每个集合的全选框与谱面行勾选状态。
+    for (const block of container.querySelectorAll<HTMLElement>(".collection-block")) {
+      const allBox = block.querySelector<HTMLInputElement>('.collection-head input[type="checkbox"]')!;
+      const boxes = Array.from(
+        block.querySelectorAll<HTMLInputElement>('.beatmap-row input[type="checkbox"]'),
+      );
+      const collection = (boxes[0]?.dataset.collection ?? "");
+      const md5s = selection.get(collection);
+      if (!md5s) continue;
+      boxes.forEach((box) => (box.checked = md5s.has(box.dataset.md5!)));
+      allBox.checked = md5s.size > 0 && md5s.size === boxes.length;
+    }
+  };
+
+  return {
+    selection,
+    selectAll() {
+      for (const [name] of selection) {
+        const collection = collections.find((c) => c.name === name)!;
+        selection.set(name, new Set(collection.beatmaps.map((b) => b.md5)));
+      }
+      refreshCollectionBoxes();
+    },
+    invert() {
+      for (const [name, md5s] of selection) {
+        const collection = collections.find((c) => c.name === name)!;
+        const all = collection.beatmaps.map((b) => b.md5);
+        selection.set(
+          name,
+          new Set(all.filter((md5) => !md5s.has(md5))),
+        );
+      }
+      refreshCollectionBoxes();
+    },
+    clear() {
+      for (const [name] of selection) selection.set(name, new Set());
+      refreshCollectionBoxes();
+    },
+  };
+}
+
+/** 把 Map<集合, Set<MD5>> 折算成非空的后端选择参数。 */
+function selectionToParam(
+  selection: Map<string, Set<string>>,
+): { name: string; md5s: string[] }[] {
+  return [...selection.entries()]
+    .map(([name, md5s]) => ({ name, md5s: [...md5s] }))
+    .filter((entry) => entry.md5s.length > 0);
+}
+
+let lazerColumn: ColumnController | null = null;
+let stableColumn: ColumnController | null = null;
+
+async function loadCollectionPage() {
+  const stableDir = els.stablePath.textContent.trim();
+  if (stableDir === "未设置") return;
+  if (!stableDir) return;
+  els.collectionSummary.textContent = "正在读取（解析 client.realm / collection.db / osu!.db）…";
+  els.collectionResult.textContent = "";
+  try {
+    const page = await invoke<CollectionPageData>("load_collection_page", { stableDir });
+    els.collectionSummary.textContent =
+      `stable 目录:${page.stableDir} · osu!.db 收录 ${page.osuDbBeatmaps.toLocaleString()} 张难度 · ` +
+      `lazer 收藏夹 ${page.lazerCollections.length} 个 · collection.db 收藏夹 ${page.stableCollections.length} 个`;
+    lazerColumn = renderCollectionTable(els.lazerCollectionList, page.lazerCollections);
+    stableColumn = renderCollectionTable(els.stableCollectionList, page.stableCollections);
+  } catch (error) {
+    els.collectionSummary.textContent = `读取失败:${error}`;
+  }
+}
+
+function syncMode(): string {
+  return (
+    document.querySelector<HTMLInputElement>('input[name="sync-mode"]:checked')?.value ??
+    "append"
+  );
+}
+
+async function collectionResultOf(promise: Promise<{ writtenCollections: number; written_hashes?: number; writtenHashes?: number; backup: string }>) {
+  try {
+    const result = await promise;
+    els.collectionResult.textContent =
+      `完成（预览副本）：结果已写入 ${result.backup}，现有 ${result.writtenCollections} 个收藏夹。` +
+      `原 collection.db 未被修改，确认无误后请手动用副本替换原文件。`;
+    await loadCollectionPage();
+  } catch (error) {
+    els.collectionResult.textContent = `失败:${error}`;
+  }
+}
+
+
 // ---- 事件绑定 ----
 
 els.list.addEventListener("change", updateSelectionInfo);
@@ -961,8 +1438,6 @@ els.list.addEventListener("click", (event) => {
   if (!row) return;
   const box = row.querySelector<HTMLInputElement>('input[type="checkbox"]');
   if (!box) return;
-  // 直接点到 checkbox 本身时阻止浏览器默认翻转（行内其他位置没有默认行为）。
-  if (event.target === box) event.preventDefault();
   const boxes = Array.from(
     els.list.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'),
   );
@@ -995,12 +1470,171 @@ els.invertSelect.addEventListener("click", () => {
   updateSelectionInfo();
 });
 els.reload.addEventListener("click", load);
+els.pageNav.addEventListener("click", (event) => {
+  const chip = (event.target as HTMLElement).closest<HTMLElement>(".chip");
+  if (!chip?.dataset.page) return;
+  switchPage(chip.dataset.page as "export" | "space" | "collections" | "settings");
+});
+els.collectionLoad.addEventListener("click", loadCollectionPage);
+
+// ---- stable 列右键删除（lazer 侧只读，不提供任何修改入口）----
+const ctxMenu = document.getElementById("collection-context-menu")!;
+let ctxBeatmap: { collection: string; md5: string } | null = null;
+let ctxCollection: string | null = null;
+
+function hideContextMenu() {
+  ctxMenu.hidden = true;
+  ctxBeatmap = null;
+  ctxCollection = null;
+}
+
+function deleteViaContext(selections: { name: string; md5s: string[] }[], describe: string) {
+  const stableDir = els.stablePath.textContent.trim();
+  if (stableDir === "未设置") return;
+  const total = selections.reduce((sum, s) => sum + s.md5s.length, 0);
+  if (!total) return;
+  if (!confirm(`确定从 collection.db ${describe}（共 ${total} 张谱面）吗？`)) return;
+  collectionResultOf(invoke("delete_stable_collections", { stableDir, selections }));
+}
+
+els.stableCollectionList.addEventListener("contextmenu", (event) => {
+  event.preventDefault();
+  hideContextMenu();
+  const target = event.target as HTMLElement;
+  const beatmapRow = target.closest<HTMLElement>(".beatmap-row");
+  const head = target.closest<HTMLElement>(".collection-head");
+  if (beatmapRow) {
+    const box = beatmapRow.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+    ctxBeatmap = { collection: box.dataset.collection!, md5: box.dataset.md5! };
+    ctxCollection = box.dataset.collection!;
+  } else if (head) {
+    ctxCollection =
+      head.querySelector<HTMLElement>(".title")?.textContent ?? null;
+  }
+  if (!ctxCollection) return;
+  ctxMenu.hidden = false;
+  ctxMenu.style.left = `${Math.min(event.clientX, window.innerWidth - 190)}px`;
+  ctxMenu.style.top = `${Math.min(event.clientY, window.innerHeight - 140)}px`;
+});
+
+document.addEventListener("click", (event) => {
+  if (!ctxMenu.hidden && !ctxMenu.contains(event.target as Node)) hideContextMenu();
+});
+document.addEventListener("contextmenu", (event) => {
+  if (!ctxMenu.hidden && !ctxMenu.contains(event.target as Node)) hideContextMenu();
+});
+document.getElementById("ctx-delete-selected")!.addEventListener("click", () => {
+  if (!stableColumn) return hideContextMenu();
+  const selections = selectionToParam(stableColumn.selection);
+  hideContextMenu();
+  if (selections.length) deleteViaContext(selections, "删除勾选的谱面");
+});
+document.getElementById("ctx-delete-beatmap")!.addEventListener("click", () => {
+  const target = ctxBeatmap;
+  hideContextMenu();
+  if (target) deleteViaContext([{ name: target.collection, md5s: [target.md5] }], "删除这张谱面");
+});
+document.getElementById("ctx-delete-collection")!.addEventListener("click", () => {
+  const name = ctxCollection;
+  hideContextMenu();
+  if (!name || !stableColumn) return;
+  const md5s = stableColumn.selection.get(name);
+  if (!md5s?.size) return;
+  deleteViaContext([{ name, md5s: [...md5s] }], "删除这个收藏夹");
+});
+document.getElementById("lazer-col-all")!.addEventListener("click", () => lazerColumn?.selectAll());
+document.getElementById("lazer-col-invert")!.addEventListener("click", () => lazerColumn?.invert());
+document.getElementById("lazer-col-none")!.addEventListener("click", () => lazerColumn?.clear());
+document.getElementById("stable-col-all")!.addEventListener("click", () => stableColumn?.selectAll());
+document.getElementById("stable-col-invert")!.addEventListener("click", () => stableColumn?.invert());
+document.getElementById("stable-col-none")!.addEventListener("click", () => stableColumn?.clear());
+els.collectionSync.addEventListener("click", () => {
+  const stableDir = els.stablePath.textContent.trim();
+  if (stableDir === "未设置") return;
+  if (!stableDir) return;
+  if (!lazerColumn) return;
+  const selections = selectionToParam(lazerColumn.selection);
+  const mode = syncMode();
+  if (
+    mode === "replace" &&
+    !confirm("替换模式会清空 collection.db 中未选中的内容，确定继续吗？")
+  ) {
+    return;
+  }
+  collectionResultOf(invoke("sync_collections", { stableDir, selections, mode }));
+});
+els.collectionImportBrowse.addEventListener("click", async () => {
+  const file = await open({
+    multiple: false,
+    title: "选择要导入的 collection.db 文件",
+    filters: [{ name: "collection.db", extensions: ["db"] }],
+  });
+  if (typeof file === "string") els.collectionImportPath.value = file;
+});
+els.collectionImportAppend.addEventListener("click", () => {
+  const stableDir = els.stablePath.textContent.trim();
+  if (stableDir === "未设置") return;
+  const fromFile = els.collectionImportPath.value.trim();
+  if (!stableDir || !fromFile) return;
+  collectionResultOf(invoke("import_collections", { fromFile, stableDir, mode: "append" }));
+});
+els.collectionImportReplace.addEventListener("click", () => {
+  const stableDir = els.stablePath.textContent.trim();
+  if (stableDir === "未设置") return;
+  const fromFile = els.collectionImportPath.value.trim();
+  if (!stableDir || !fromFile) return;
+  collectionResultOf(invoke("import_collections", { fromFile, stableDir, mode: "replace" }));
+});
+
+els.diskUsageBtn.addEventListener("click", showDiskUsage);
+// 全选集合：把当前可见（受搜索过滤）的收藏夹全部加入多选；已全选则清空。
+els.selectAllCollections.addEventListener("click", () => {
+  if (!library) return;
+  const query = els.navSearch.value.trim().toLowerCase();
+  const visible = query
+    ? library.collections.filter((c) => c.name.toLowerCase().includes(query))
+    : library.collections;
+  if (!visible.length) return;
+  const current = collectionFilter instanceof Set ? collectionFilter : new Set<string>();
+  const allSelected = visible.every((c) => current.has(c.name));
+  if (allSelected) {
+    const next = new Set(current);
+    for (const c of visible) next.delete(c.name);
+    collectionFilter = next.size ? next : null;
+  } else {
+    const next = new Set(current);
+    for (const c of visible) next.add(c.name);
+    collectionFilter = next;
+  }
+  renderSidebar();
+  render();
+});
+els.dedupeRun.addEventListener("click", runDedupe);
+els.dedupeStop.addEventListener("click", async () => {
+  try {
+    await invoke("cancel_dedupe");
+  } catch {
+    /* 忽略 */
+  }
+});
 els.stopExport.addEventListener("click", stopExport);
 els.exportingClose.addEventListener("click", requestCloseExporting);
 els.progressWrap.addEventListener("click", (event) => {
   if (event.target === els.progressWrap) requestCloseExporting();
 });
 els.changeDir.addEventListener("click", changeDir);
+els.lazerBrowse.addEventListener("click", changeDir);
+els.stableBrowse.addEventListener("click", async () => {
+  const dir = await open({ directory: true, title: "选择 osu!stable 目录（根目录或 Songs 均可）" });
+  if (!dir) return;
+  els.stablePath.textContent = dir;
+  try {
+    localStorage.setItem("stable-dir", dir);
+  } catch {
+    /* 忽略持久化失败 */
+  }
+  updateStableDirDisplays();
+});
 els.resetDir.addEventListener("click", resetDir);
 els.exportBtn.addEventListener("click", openExportModal);
 els.exportConfirm.addEventListener("click", exportSelected);
@@ -1016,11 +1650,7 @@ els.sidebar.addEventListener("click", (event) => {
   const el = btn as HTMLElement;
   // 谱面分类：未选中时切换到该分类并展开；已选中时点击折叠/展开收藏夹列表。
   if (el.classList.contains("category")) {
-    if (tab !== "beatmaps") {
-      tab = "beatmaps";
-    } else {
-      beatmapsExpanded = !beatmapsExpanded;
-    }
+    tab = "beatmaps";
     refreshSortSelect();
     renderSidebar();
     render();
@@ -1044,6 +1674,10 @@ function debounce<F extends (...args: never[]) => void>(fn: F, delay = 200) {
 }
 
 els.navSearch.addEventListener("input", debounce(renderSidebar));
+els.dupFilter.addEventListener("click", () => {
+  dupFilterOn = !dupFilterOn;
+  render();
+});
 els.rulesetFilter.addEventListener("click", (event) => {
   const chip = (event.target as HTMLElement).closest<HTMLButtonElement>(".chip");
   if (!chip) return;
@@ -1064,15 +1698,7 @@ els.perfMode.addEventListener("change", () => {
   persistSetting("setting-perf", perfMode);
   render();
 });
-els.settingsToggle.addEventListener("click", () => {
-  els.settingsModal.hidden = false;
-});
-els.settingsClose.addEventListener("click", () => {
-  els.settingsModal.hidden = true;
-});
-els.settingsModal.addEventListener("click", (event) => {
-  if (event.target === els.settingsModal) els.settingsModal.hidden = true;
-});
+
 els.sortKey.addEventListener("change", () => {
   sortKey = els.sortKey.value;
   render();
@@ -1083,11 +1709,29 @@ els.sortDir.addEventListener("click", () => {
   render();
 });
 
+await listen<{ phase: string; processed: number; total: number; percent: number }>(
+  "dedupe-progress",
+  (event) => {
+    const { phase, processed, total, percent } = event.payload;
+    els.dedupeProgressText.textContent = `${DEDUPE_PHASES[phase] ?? phase}（${processed}${
+      total ? `/${total}` : ""
+    }）`;
+    els.dedupeProgressFill.style.width = `${percent}%`;
+  },
+);
+
 await listen<{ done: number; total: number; name: string }>("export-progress", (event) => {
   const { done, total, name } = event.payload;
   setProgress(total ? done / total : 0, `(${done}/${total}) ${name}`);
 });
 
 restoreSettings();
+try {
+  const stableDir = localStorage.getItem("stable-dir");
+  if (stableDir) els.stablePath.textContent = stableDir;
+  updateStableDirDisplays();
+} catch {
+  /* 忽略 */
+}
 refreshSortSelect();
 load();

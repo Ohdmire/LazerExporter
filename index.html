@@ -13,6 +13,7 @@
         <div class="status-row">
           <div id="lazer-status" class="status">正在检测 osu!lazer 目录…</div>
           <button id="change-dir" class="compact">选择目录</button>
+          <button id="reload" class="compact">重载数据库</button>
           <button id="reset-dir" class="compact" hidden>恢复默认目录</button>
         </div>
       </header>
@@ -20,6 +21,9 @@
       <div id="layout">
         <nav id="sidebar">
           <input id="nav-search" type="search" placeholder="搜索收藏夹…" />
+          <div class="nav-tools">
+            <button id="select-all-collections" class="compact">全选集合</button>
+          </div>
           <div class="nav-group">
             <button class="nav-item category" data-tab="beatmaps">
               <span class="arrow">▾</span>谱面
@@ -35,6 +39,14 @@
         </nav>
 
         <div id="content">
+          <div id="page-nav">
+            <button data-page="export" class="chip active">导出</button>
+            <button data-page="space" class="chip">空间管理</button>
+            <button data-page="collections" class="chip">集合管理</button>
+            <button data-page="settings" class="chip">设置</button>
+          </div>
+
+          <div id="page-export">
           <div class="toolbar">
             <input id="search" type="search" placeholder="搜索…" />
             <select id="sort-key" title="排序方式"></select>
@@ -44,35 +56,12 @@
             <button id="select-none">取消全选</button>
             <span id="selection-info"></span>
             <span style="flex: 1"></span>
-            <button id="settings-toggle">⚙ 设置</button>
-            <button id="reload">重载数据库</button>
             <button id="export" class="primary" disabled>导出</button>
           </div>
 
           <div id="collection-chips" class="ruleset-filter" hidden></div>
 
-          <div id="settings-modal" class="modal-overlay" hidden>
-            <div class="modal">
-              <div class="modal-header">
-                <h2>设置</h2>
-                <button id="settings-close" class="compact">✕</button>
-              </div>
-              <div class="modal-body">
-                <label class="setting-item">
-                  <input id="perf-mode" type="checkbox" />
-                  <span>无图模式</span>
-                  <span class="setting-desc">全局设置：所有列表不加载封面，仅文本渲染</span>
-                </label>
-                <label class="setting-item">
-                  <input id="unicode-mode" type="checkbox" checked />
-                  <span>优先显示 Unicode 名称</span>
-                  <span class="setting-desc">标题/作者优先显示原名（如日文），搜索始终两者都匹配</span>
-                </label>
-              </div>
-            </div>
-          </div>
-
-          <div id="export-modal" class="modal-overlay" hidden>
+                    <div id="export-modal" class="modal-overlay" hidden>
             <div class="modal">
               <div class="modal-header">
                 <h2>导出确认</h2>
@@ -126,6 +115,123 @@
             <button data-ruleset="taiko" class="chip">taiko</button>
             <button data-ruleset="fruits" class="chip">catch</button>
             <button data-ruleset="mania" class="chip">mania</button>
+            <span class="chip-gap"></span>
+            <button id="dup-filter" class="chip" title="只显示重复导入的谱面集（同上架编号出现多次）">仅重复</button>
+          </div>
+
+          <main id="list"></main>
+          </div><!-- /page-export -->
+
+          <div id="page-collections" hidden>
+            <h2 class="page-title">集合管理</h2>
+            <div id="collections-stable-dir" class="setting-desc">未设置 stable 目录（在设置页选择）</div>
+            <div class="export-format-row">
+              <div class="setting-desc">读取 client.realm / collection.db / osu!.db 交叉定位；写盘前自动备份。</div>
+              <span style="flex: 1"></span>
+              <button id="collection-load" class="primary">读取数据</button>
+            </div>
+            <div id="collection-summary" class="setting-desc"></div>
+
+            <div class="collection-columns">
+              <div class="collection-col">
+                <div class="collection-col-head">
+                  <h3 class="section-title">lazer 收藏夹 → 导出（只读）</h3>
+                  <button id="lazer-col-all" class="compact">全选</button>
+                  <button id="lazer-col-invert" class="compact">反选</button>
+                  <button id="lazer-col-none" class="compact">取消</button>
+                </div>
+                <div id="lazer-collection-list" class="collection-table"></div>
+              </div>
+
+              <div class="collection-col">
+                <div class="collection-col-head">
+                  <h3 class="section-title">stable collection.db</h3>
+                  <button id="stable-col-all" class="compact">全选</button>
+                  <button id="stable-col-invert" class="compact">反选</button>
+                  <button id="stable-col-none" class="compact">取消</button>
+                </div>
+                <div id="stable-collection-list" class="collection-table"></div>
+              </div>
+            </div>
+
+            <div class="collection-actions">
+              <div class="action-row">
+                <label class="toggle"
+                  ><input type="radio" name="sync-mode" value="append" checked /> 导出·追加</label
+                >
+                <label class="toggle"
+                  ><input type="radio" name="sync-mode" value="replace" /> 导出·替换</label
+                >
+                <button id="collection-sync" class="primary">导出所选 → collection.db</button>
+              </div>
+              <div class="action-row">
+                <div class="setting-desc">所有修改均为预览性质：结果写入 collection.export.db 副本，原 collection.db 永不改动；右键 stable 列表可删除谱面/收藏夹（lazer 侧只读）。</div>
+                <input id="collection-import-path" type="text" placeholder="导入外部 collection.db…" readonly class="hidden-input" />
+                <button id="collection-import-browse" class="compact">选择文件…</button>
+                <button id="collection-import-append" class="compact">导入·追加</button>
+                <button id="collection-import-replace" class="compact">导入·替换</button>
+              </div>
+            </div>
+            <div id="collection-result" class="setting-desc"></div>
+          </div>
+
+          <div id="page-space" hidden>
+            <h2 class="page-title">空间管理</h2>
+            <div id="space-stable-dir" class="setting-desc">未设置 stable 目录（在设置页选择）</div>
+            <div class="panel">
+                <h3 class="section-title">磁盘占用统计</h3>
+                <div id="usage-content" class="usage-content">
+                  <button id="disk-usage-btn" class="compact">开始统计</button>
+                </div>
+                <h3 class="section-title">压缩 lazer 空间（与 stable 去重）</h3>
+                <div class="setting-desc">
+                  扫描 stable 谱面目录，把 lazer files/
+                  中内容完全一致的重复文件替换为指向 stable 的硬链接，释放重复占用的空间。建议先关闭
+                  osu!lazer 再执行。
+                </div>
+                <div class="export-format-row">
+                  <label class="toggle"
+                    ><input id="dedupe-dry-run" type="checkbox" checked /> 仅预览（试运行，不实际修改）</label
+                  >
+                </div>
+                <div class="modal-actions">
+                  <button id="dedupe-run" class="primary">开始扫描</button>
+                </div>
+                <div id="dedupe-progress" hidden>
+                  <div id="dedupe-progress-text"></div>
+                  <div id="progress-bar"><div id="dedupe-progress-fill"></div></div>
+                  <button id="dedupe-stop" class="danger">终止</button>
+                </div>
+                <div id="dedupe-result" class="setting-desc"></div>
+            </div>
+          </div>
+
+          <div id="page-settings" hidden>
+            <h2 class="page-title">设置</h2>
+            <div class="panel">
+              <div class="modal-body">
+                <label class="setting-item">
+                  <input id="perf-mode" type="checkbox" />
+                  <span>无图模式</span>
+                  <span class="setting-desc">全局设置：所有列表不加载封面，仅文本渲染</span>
+                </label>
+                <label class="setting-item">
+                  <input id="unicode-mode" type="checkbox" checked />
+                  <span>优先显示 Unicode 名称</span>
+                  <span class="setting-desc">标题/作者优先显示原名（如日文），搜索始终两者都匹配</span>
+                </label>
+                <div class="setting-item setting-dir-row">
+                  <span>lazer 目录</span>
+                  <button id="lazer-browse" class="compact">浏览…</button>
+                </div>
+                <div id="lazer-dir-display" class="setting-desc dir-display">未检测到</div>
+                <div class="setting-item setting-dir-row">
+                  <span>stable 目录</span>
+                  <button id="stable-browse" class="compact">浏览…</button>
+                </div>
+                <div id="stable-dir-display" class="setting-desc dir-display">未设置</div>
+              </div>
+            </div>
           </div>
 
           <div id="exporting-modal" class="modal-overlay" hidden>
@@ -144,9 +250,13 @@
             </div>
           </div>
 
-          <main id="list"></main>
         </div>
       </div>
+    </div>
+    <div id="collection-context-menu" hidden>
+      <button id="ctx-delete-selected">删除勾选的谱面</button>
+      <button id="ctx-delete-beatmap">删除这张谱面</button>
+      <button id="ctx-delete-collection">删除这个收藏夹</button>
     </div>
     <script type="module" src="/src/main.ts"></script>
   </body>

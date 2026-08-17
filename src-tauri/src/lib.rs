@@ -1,4 +1,7 @@
 mod exporter;
+mod maintenance;
+mod collection_sync;
+mod state;
 mod lazer_realm;
 mod platform;
 
@@ -7,6 +10,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(exporter::ExportCancel::default())
+        .manage(std::sync::Arc::new(state::CachedLibrary::default()))
         .invoke_handler(tauri::generate_handler![
             platform::detect_lazer,
             platform::set_lazer_data_dir,
@@ -16,6 +20,13 @@ pub fn run() {
             exporter::export_skins,
             exporter::export_replays,
             exporter::cancel_export,
+            maintenance::get_lazer_disk_usage,
+            maintenance::dedupe_lazer_files,
+            maintenance::cancel_dedupe,
+            collection_sync::load_collection_page,
+            collection_sync::sync_collections,
+            collection_sync::import_collections,
+            collection_sync::delete_stable_collections,
         ])
         .setup(|_app| {
             platform::init_config();

@@ -14,6 +14,7 @@ use crate::platform;
 /// 行数不超过该阈值的表整表全载；超过的表按行懒加载。
 const BULK_ROW_LIMIT: usize = 50_000;
 
+
 #[derive(Debug, Clone, Serialize)]
 pub struct RealmFile {
     pub filename: String,
@@ -103,9 +104,11 @@ pub struct RealmCollection {
     pub name: String,
     /// 收藏夹按谱面 MD5 关联难度；这里已折算成所属谱面集的 id。
     pub set_ids: Vec<String>,
+    /// 原始的难度 MD5 列表（collection.db 的原生格式），供导出/同步使用。
+    pub md5s: Vec<String>,
 }
 
-#[derive(Debug, Default, Serialize)]
+#[derive(Debug, Default, Clone, Serialize)]
 pub struct RealmLibrary {
     pub sets: Vec<RealmSet>,
     pub skins: Vec<RealmSkin>,
@@ -121,16 +124,18 @@ pub struct LibraryResult {
 }
 
 #[tauri::command]
-pub async fn list_library() -> Result<LibraryResult, String> {
+pub async fn list_library(
+    cache: tauri::State<'_, std::sync::Arc<crate::state::CachedLibrary>>,
+) -> Result<LibraryResult, String> {
     let realm_path = platform::lazer_data_root()
         .filter(|root| root.join("client.realm").is_file())
         .map(|root| root.join("client.realm"))
         .ok_or_else(|| "未找到 osu!lazer 数据目录（client.realm）".to_string())?;
     let realm_path_display = realm_path.display().to_string();
 
+    let cache = cache.inner().clone();
     tokio::task::spawn_blocking(move || {
-        let mut library = parse_realm(&realm_path)?;
-        attach_file_sizes(&mut library)?;
+        let library = cache.refresh()?;
         Ok(LibraryResult {
             realm_path: realm_path_display,
             library,
@@ -434,9 +439,11 @@ fn parse_collections(store: &mut RowStore<'_>, library: &mut RealmLibrary) -> Re
             continue;
         }
         let mut set_ids: Vec<String> = Vec::new();
+        let mut md5s: Vec<String> = Vec::new();
         if let Some(Value::List(values)) = row.get("BeatmapMD5Hashes") {
             for value in values {
                 if let Value::String(md5) = value {
+                    md5s.push(md5.clone());
                     if let Some(set_id) = md5_to_set.get(md5.as_str()) {
                         if !set_ids.iter().any(|existing| existing == set_id) {
                             set_ids.push(set_id.clone());
@@ -445,7 +452,7 @@ fn parse_collections(store: &mut RowStore<'_>, library: &mut RealmLibrary) -> Re
                 }
             }
         }
-        library.collections.push(RealmCollection { name, set_ids });
+        library.collections.push(RealmCollection { name, set_ids, md5s });
     }
     // lazer 的“收藏夹”（Favourites）固定置顶。
     library
@@ -717,3 +724,113 @@ mod tests {
 
 
 
+
+#[cfg(test)]
+mod bench_phases {
+    use super::*;
+    use std::time::Instant;
+
+    /// 分阶段计时读取 client.realm：`cargo test --lib bench_phases -- --ignored --nocapture`
+    #[test]
+    #[ignore = "需要本机安装 osu!lazer 且存在 client.realm"]
+    fn phase_timings() {
+        let data_root = crate::platform::lazer_data_root().expect("未找到 lazer 数据目录");
+        let realm_path = data_root.join("client.realm");
+
+        // 0. 快照复制
+        let t = Instant::now();
+        let snapshot = snapshot_realm(&realm_path).expect("快照失败");
+        let copy = t.elapsed();
+        let size_mb = std::fs::metadata(&realm_path).map(|m| m.len()).unwrap_or(0) as f64
+            / 1024.0
+            / 1024.0;
+
+        // 1. 打开 + 解析组结构
+        let t = Instant::now();
+        let realm = Realm::open(&snapshot).expect("打开失败");
+        let group = realm.into_group().expect("读组失败");
+        let open = t.elapsed();
+        let mut store = RowStore::new(&group);
+        let mut library = RealmLibrary::default();
+
+        // 2. 谱面集表
+        let t = Instant::now();
+        parse_beatmap_sets(&mut store, &mut library).expect("谱面集失败");
+        let sets = t.elapsed();
+
+        // 3. 皮肤表
+        let t = Instant::now();
+        parse_skins(&mut store, &mut library).expect("皮肤失败");
+        let skins = t.elapsed();
+
+        // 4. 成绩表（回放）
+        let t = Instant::now();
+        parse_scores(&mut store, &mut library).expect("成绩失败");
+        let scores = t.elapsed();
+
+        // 5. 收藏夹表
+        let t = Instant::now();
+        parse_collections(&mut store, &mut library).expect("收藏夹失败");
+        let collections = t.elapsed();
+
+        // 6. 文件大小 stat + 封面选择（磁盘 IO）
+        let t = Instant::now();
+        attach_file_sizes(&mut library).expect("stat 失败");
+        let stat = t.elapsed();
+
+        let _ = std::fs::remove_file(&snapshot);
+        let total = copy + open + sets + skins + scores + collections + stat;
+        println!("=== client.realm 分阶段耗时（{size_mb:.1} MB）===");
+        println!(
+            "{:<28} {:>8.2} s  {:>5.1}%",
+            "0. 快照复制",
+            copy.as_secs_f64(),
+            copy.as_secs_f64() / total.as_secs_f64() * 100.0
+        );
+        println!(
+            "{:<28} {:>8.2} s  {:>5.1}%",
+            "1. 打开+读 Realm 组",
+            open.as_secs_f64(),
+            open.as_secs_f64() / total.as_secs_f64() * 100.0
+        );
+        println!(
+            "{:<28} {:>8.2} s  {:>5.1}%  ({} sets)",
+            "2. class_BeatmapSet",
+            sets.as_secs_f64(),
+            sets.as_secs_f64() / total.as_secs_f64() * 100.0,
+            library.sets.len()
+        );
+        println!(
+            "{:<28} {:>8.2} s  {:>5.1}%",
+            "3. class_Skin",
+            skins.as_secs_f64(),
+            skins.as_secs_f64() / total.as_secs_f64() * 100.0
+        );
+        println!(
+            "{:<28} {:>8.2} s  {:>5.1}%  ({} scores)",
+            "4. class_Score",
+            scores.as_secs_f64(),
+            scores.as_secs_f64() / total.as_secs_f64() * 100.0,
+            library.scores.len()
+        );
+        println!(
+            "{:<28} {:>8.2} s  {:>5.1}%",
+            "5. class_BeatmapCollection",
+            collections.as_secs_f64(),
+            collections.as_secs_f64() / total.as_secs_f64() * 100.0
+        );
+        println!(
+            "{:<28} {:>8.2} s  {:>5.1}%",
+            "6. stat 文件大小+封面",
+            stat.as_secs_f64(),
+            stat.as_secs_f64() / total.as_secs_f64() * 100.0
+        );
+        println!("{:<28} {:>8.2} s", "总计", total.as_secs_f64());
+        let lookup_s = ROW_LOOKUP_MICROS.load(std::sync::atomic::Ordering::Relaxed) as f64 / 1e6;
+        let lookups = ROW_LOOKUP_MICROS_COUNT.load(std::sync::atomic::Ordering::Relaxed);
+        println!(
+            "其中 RowStore::row 解引用: {lookup_s:.2} s ({:.1}%), 共 {lookups} 次",
+            lookup_s / total.as_secs_f64() * 100.0
+        );
+    }
+}

@@ -13,8 +13,9 @@ use tauri::Emitter;
 use zip::write::SimpleFileOptions;
 use zip::ZipWriter;
 
-use crate::lazer_realm::{self, RealmLibrary};
+use crate::lazer_realm::RealmLibrary;
 use crate::platform;
+use crate::state::CachedLibrary;
 
 /// 导出取消标志：cancel_export 置位，导出循环在下一个条目前停止。
 #[derive(Default)]
@@ -66,15 +67,9 @@ fn display_name_with(use_unicode: bool, romanized: &str, unicode: &str) -> Strin
     if first.trim().is_empty() { second.to_string() } else { first.to_string() }
 }
 
-fn load_library() -> Result<(PathBuf, RealmLibrary), String> {
+fn load_library(cache: &std::sync::Arc<CachedLibrary>) -> Result<(PathBuf, RealmLibrary), String> {
     let files_root = platform::lazer_files_root().ok_or("无法确定 lazer 文件存储目录")?;
-    let realm_path = platform::lazer_data_root()
-        .filter(|root| root.join("client.realm").is_file())
-        .map(|root| root.join("client.realm"))
-        .ok_or_else(|| "未找到 osu!lazer 数据目录（client.realm）".to_string())?;
-    let mut library = lazer_realm::parse_realm_blocking(&realm_path)?;
-    lazer_realm::attach_file_sizes(&mut library)?;
-    Ok((files_root, library))
+    Ok((files_root, cache.get_or_parse()?))
 }
 
 fn blob_path(files_root: &Path, hash: &str) -> PathBuf {
@@ -267,6 +262,7 @@ fn write_folder(
 pub async fn export_sets(
     app: tauri::AppHandle,
     cancel: tauri::State<'_, ExportCancel>,
+    cache: tauri::State<'_, std::sync::Arc<CachedLibrary>>,
     set_ids: Vec<String>,
     out_dir: String,
     format: Option<String>,
@@ -278,8 +274,9 @@ pub async fn export_sets(
     let hardlink = hardlink.unwrap_or(false);
     let use_unicode = use_unicode.unwrap_or(true);
     let overwrite = overwrite.unwrap_or(false);
+    let cache = cache.inner().clone();
     export_loop(app, cancel.0.clone(), out_dir, move |_out, notices, skipped| {
-        let (files_root, library) = load_library()?;
+        let (files_root, library) = load_library(&cache)?;
         type Item = Box<dyn FnOnce(&Path, &dyn Fn(&str)) -> Result<(), String> + Send>;
         let mut items: Vec<(String, Item)> = Vec::new();
         for set_id in &set_ids {
@@ -340,6 +337,7 @@ pub async fn export_sets(
 pub async fn export_skins(
     app: tauri::AppHandle,
     cancel: tauri::State<'_, ExportCancel>,
+    cache: tauri::State<'_, std::sync::Arc<CachedLibrary>>,
     skin_ids: Vec<String>,
     out_dir: String,
     format: Option<String>,
@@ -350,8 +348,9 @@ pub async fn export_skins(
     let folder = format.as_deref().is_some_and(is_folder);
     let hardlink = hardlink.unwrap_or(false);
     let overwrite = overwrite.unwrap_or(false);
+    let cache = cache.inner().clone();
     export_loop(app, cancel.0.clone(), out_dir, move |_out, notices, skipped| {
-        let (files_root, library) = load_library()?;
+        let (files_root, library) = load_library(&cache)?;
         type Item = Box<dyn FnOnce(&Path, &dyn Fn(&str)) -> Result<(), String> + Send>;
         let mut items: Vec<(String, Item)> = Vec::new();
         for skin_id in &skin_ids {
@@ -406,6 +405,7 @@ pub async fn export_skins(
 pub async fn export_replays(
     app: tauri::AppHandle,
     cancel: tauri::State<'_, ExportCancel>,
+    cache: tauri::State<'_, std::sync::Arc<CachedLibrary>>,
     score_ids: Vec<String>,
     out_dir: String,
     hardlink: Option<bool>,
@@ -415,8 +415,9 @@ pub async fn export_replays(
     let hardlink = hardlink.unwrap_or(false);
     let use_unicode = use_unicode.unwrap_or(true);
     let overwrite = overwrite.unwrap_or(false);
+    let cache = cache.inner().clone();
     export_loop(app, cancel.0.clone(), out_dir, move |_out, notices, skipped| {
-        let (files_root, library) = load_library()?;
+        let (files_root, library) = load_library(&cache)?;
         type Item = Box<dyn FnOnce(&Path, &dyn Fn(&str)) -> Result<(), String> + Send>;
         let mut items: Vec<(String, Item)> = Vec::new();
         for score_id in &score_ids {

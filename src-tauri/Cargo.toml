@@ -14,14 +14,23 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 realm-db-reader = { git = "https://github.com/Ohdmire/realm-db-reader" }
+osu-db = { path = "../osu-db" }
 tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 base64 = "0.22"
+sha2 = "0.10"
+walkdir = "2"
 zip = { version = "4", default-features = false, features = ["deflate"] }
 tokio = { version = "1", features = ["fs", "rt-multi-thread"] }
 
 [profile.release]
 strip = true
 lto = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }
+
+[dev-dependencies]
+tempfile = "3.27.0"

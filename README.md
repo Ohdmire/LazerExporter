@@ -10,7 +10,7 @@ osu!lazer 本地数据导出与管理工具。
 
 ![preview](preview.png)
 
-直接只读解析 lazer 的 `client.realm` 数据库,把谱面、皮肤、回放导出为可直接使用的文件,并提供收藏夹管理与压缩空间功能
+解析 lazer 的 `client.realm` 数据库,把谱面、皮肤、回放导出为可直接使用的文件,并提供收藏夹管理与压缩空间功能
 
 ## 功能
 
@@ -79,11 +79,6 @@ cd src-tauri && cargo build --release
 pnpm tauri build
 ```
 
-## 目录约定
+## 使用
 
-| 内容 | 位置 |
-|---|---|
-| lazer 数据根(自动) | Windows `%APPDATA%\osu` / Linux `~/.local/share/osu` |
-| 文件存储(含 `client.realm`) | 数据根,或其 `storage.ini` 的 `FullPath` 所指目录 |
-| stable 根 | 用户指定(需含 `osu!.db`;选中 `Songs` 子目录也可自动回溯) |
-| collection 工作副本 | stable 目录下 `collection.export.db` |
+直接到Release下最新版本

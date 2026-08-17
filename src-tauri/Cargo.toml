@@ -14,7 +14,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 realm-db-reader = { git = "https://github.com/Ohdmire/realm-db-reader" }
-osu-db = { path = "../osu-db" }
+osu-db = "0.2.1"
 tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }

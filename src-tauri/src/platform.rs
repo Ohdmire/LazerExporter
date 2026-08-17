@@ -2,10 +2,11 @@
 //! Windows 默认 `%APPDATA%\osu`，Linux 默认 `~/.local/share/osu`
 //! （Flatpak 版为 `~/.var/app/sh.ppy.osu/data/osu`）；
 //! `storage.ini` 的 `FullPath` 指向用户自定义的文件存储目录（files/ 所在处）。
-//! 用户也可以手动指定数据目录（含 client.realm），选择会持久化到配置文件。
+//! 用户也可以手动指定数据目录（含 client.realm）；后端仅内存保存，
+//! 由前端 localStorage 记忆并在启动时重新应用。
 
 use std::env;
-use std::fs::{self, File};
+use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -18,47 +19,11 @@ fn home_dir() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-/// 配置目录：Windows 为 `%APPDATA%/lazer-exporter`，类 Unix 为
-/// `~/.config/lazer-exporter`。
-fn config_dir() -> Option<PathBuf> {
-    #[cfg(windows)]
-    {
-        env::var_os("APPDATA")
-            .map(PathBuf::from)
-            .map(|p| p.join("lazer-exporter"))
-    }
-    #[cfg(not(windows))]
-    {
-        env::var_os("XDG_CONFIG_HOME")
-            .map(PathBuf::from)
-            .or_else(|| home_dir().map(|home| home.join(".config")))
-            .map(|config| config.join("lazer-exporter"))
-    }
-}
-
-fn config_file() -> Option<PathBuf> {
-    config_dir().map(|dir| dir.join("config.json"))
-}
-
 /// 用户手动指定的 lazer 数据目录；None 表示使用自动检测。
 static CUSTOM_DATA_DIR: Mutex<Option<PathBuf>> = Mutex::new(None);
 
-/// 启动时从配置文件恢复手动选择的目录；失败静默（回退自动检测）。
-pub fn init_config() {
-    let Some(path) = config_file() else { return };
-    let Ok(text) = fs::read_to_string(path) else { return };
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else { return };
-    if let Some(dir) = value.get("data_dir").and_then(|v| v.as_str()) {
-        let candidate = PathBuf::from(dir);
-        if candidate.join("client.realm").is_file() {
-            if let Ok(mut slot) = CUSTOM_DATA_DIR.lock() {
-                *slot = Some(candidate);
-            }
-        }
-    }
-}
-
-/// 设置（或清除，传入 None）手动指定的数据目录并持久化。
+/// 设置（或清除，传入 None）手动指定的数据目录（仅本次运行有效，
+/// 前端负责在 localStorage 记忆并在启动时重新应用）。
 /// 目录必须包含 client.realm。
 pub fn set_custom_data_dir(dir: Option<&Path>) -> Result<(), String> {
     if let Some(dir) = dir {
@@ -70,18 +35,6 @@ pub fn set_custom_data_dir(dir: Option<&Path>) -> Result<(), String> {
         .lock()
         .map_err(|_| "配置锁中毒".to_string())?;
     *slot = dir.map(Path::to_path_buf);
-    let Some(config_path) = config_file() else {
-        return Ok(());
-    };
-    if let Some(parent) = config_path.parent() {
-        fs::create_dir_all(parent).map_err(|e| format!("创建配置目录失败：{e}"))?;
-    }
-    let json = serde_json::json!({ "data_dir": dir.map(|p| p.display().to_string()) });
-    fs::write(
-        &config_path,
-        serde_json::to_string_pretty(&json).map_err(|e| e.to_string())?,
-    )
-    .map_err(|e| format!("写入配置失败：{e}"))?;
     Ok(())
 }
 

@@ -26,13 +26,10 @@ pub fn run() {
             collection_sync::load_collection_page,
             collection_sync::sync_collections,
             collection_sync::export_collection_copy,
+            collection_sync::export_selected_sets,
             collection_sync::delete_stable_collections,
             collection_sync::discard_collection_changes,
         ])
-        .setup(|_app| {
-            platform::init_config();
-            Ok(())
-        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

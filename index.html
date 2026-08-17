@@ -22,7 +22,7 @@
         <nav id="sidebar">
           <input id="nav-search" type="search" placeholder="搜索收藏夹…" />
           <div class="nav-tools">
-            <button id="select-all-collections" class="compact">全选集合</button>
+            <button id="select-all-collections" class="compact">全选收藏夹</button>
           </div>
           <div class="nav-group">
             <button class="nav-item category" data-tab="beatmaps">
@@ -42,26 +42,11 @@
           <div id="page-nav">
             <button data-page="export" class="chip active">导出</button>
             <button data-page="space" class="chip">空间管理</button>
-            <button data-page="collections" class="chip">集合管理</button>
+            <button data-page="collections" class="chip">收藏夹管理</button>
             <button data-page="settings" class="chip">设置</button>
           </div>
 
-          <div id="page-export">
-          <div class="toolbar">
-            <input id="search" type="search" placeholder="搜索…" />
-            <select id="sort-key" title="排序方式"></select>
-            <button id="sort-dir" title="升序/降序">↓</button>
-            <button id="select-all">全选</button>
-            <button id="invert-select">反选</button>
-            <button id="select-none">取消全选</button>
-            <span id="selection-info"></span>
-            <span style="flex: 1"></span>
-            <button id="export" class="primary" disabled>导出</button>
-          </div>
-
-          <div id="collection-chips" class="ruleset-filter" hidden></div>
-
-                    <div id="export-modal" class="modal-overlay" hidden>
+          <div id="export-modal" class="modal-overlay" hidden>
             <div class="modal">
               <div class="modal-header">
                 <h2>导出确认</h2>
@@ -109,21 +94,34 @@
             </div>
           </div>
 
-          <div id="ruleset-filter" class="ruleset-filter" hidden>
+          <div id="page-export">
+          <div class="toolbar">
+            <input id="search" type="search" placeholder="搜索…" />
+            <select id="sort-key" title="排序方式"></select>
+            <button id="sort-dir" title="升序/降序">↓</button>
+            <button id="select-all">全选</button>
+            <button id="invert-select">反选</button>
+            <button id="select-none">取消全选</button>
+            <span id="selection-info"></span>
+            <span style="flex: 1"></span>
+            <button id="export" class="primary" disabled>导出</button>
+          </div>
+
+          <div id="collection-chips" class="ruleset-filter" hidden></div>
+
+                    <div id="ruleset-filter" class="ruleset-filter" hidden>
             <button data-ruleset="" class="chip active">全部</button>
             <button data-ruleset="osu" class="chip">osu!</button>
             <button data-ruleset="taiko" class="chip">taiko</button>
             <button data-ruleset="fruits" class="chip">catch</button>
             <button data-ruleset="mania" class="chip">mania</button>
-            <span class="chip-gap"></span>
-            <button id="dup-filter" class="chip" title="只显示重复导入的谱面集（同上架编号出现多次）">仅重复</button>
           </div>
 
           <main id="list"></main>
           </div><!-- /page-export -->
 
           <div id="page-collections" hidden>
-            <h2 class="page-title">集合管理</h2>
+            <h2 class="page-title">收藏夹管理</h2>
             <div id="collections-stable-dir" class="setting-desc">未设置 stable 目录（在设置页选择）</div>
             <div class="export-format-row">
               <div class="setting-desc">所有修改写入 collection.export.db 工作副本（原文件不动）；stable 列右键谱面/收藏夹可单独删除</div>
@@ -167,6 +165,7 @@
               </div>
               <div class="action-row">
                 <button id="collection-export-copy" class="primary">导出 collection.db…</button>
+                <button id="export-selected-sets" class="primary">导出所选集合谱面…</button>
               </div>
             </div>
             <div id="collection-result" class="setting-desc"></div>
@@ -197,7 +196,7 @@
                 <div id="dedupe-progress" hidden>
                   <div id="dedupe-progress-text"></div>
                   <div id="progress-bar"><div id="dedupe-progress-fill"></div></div>
-                  <button id="dedupe-stop" class="danger">终止</button>
+                  <button id="dedupe-stop" class="danger" hidden>终止</button>
                 </div>
                 <div id="dedupe-result" class="setting-desc"></div>
             </div>

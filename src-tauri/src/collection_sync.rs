@@ -15,6 +15,7 @@ use osu_db::listing::Listing;
 use serde::Serialize;
 
 use crate::lazer_realm;
+use crate::platform;
 use crate::state::CachedLibrary;
 
 #[derive(Debug, Clone, Serialize)]
@@ -142,10 +143,13 @@ fn stable_folder_cover(
 }
 
 fn collection_md5s(collection: &Collection) -> Vec<String> {
+    // collection.db 里同一难度也可能收藏多次，去重保证行数与选择集一致。
+    let mut seen = HashSet::new();
     collection
         .beatmap_hashes
         .iter()
         .filter_map(|hash| hash.clone())
+        .filter(|md5| seen.insert(md5.clone()))
         .collect()
 }
 
@@ -340,6 +344,8 @@ pub struct SyncResult {
     pub written_hashes: usize,
     /// 副本文件路径（原 collection.db 未被修改）。
     pub backup: String,
+    /// 同时导出的谱面集文件夹数（0 = 未启用）。
+    pub folders_written: usize,
 }
 
 /// 同步（导出）所选谱面 → stable collection.db（粒度为单张谱面）。
@@ -352,7 +358,7 @@ pub async fn sync_collections(
     selections: Vec<CollectionSelection>,
     mode: String,
 ) -> Result<SyncResult, String> {
-    let _ = &cache; // 预留：写入副本不需要 realm 缓存
+    let _ = &cache;
     tokio::task::spawn_blocking(move || {
         if selections.iter().all(|s| s.md5s.is_empty()) {
             return Err("未选择任何谱面".into());
@@ -410,29 +416,157 @@ pub async fn sync_collections(
         let written = list.collections.len();
         list.to_file(&out_path)
             .map_err(|e| format!("写入 collection.export.db 失败：{e}"))?;
+
         Ok(SyncResult {
             mode,
             written_collections: written,
             written_hashes,
             backup: out_path.display().to_string(),
+            folders_written: 0,
         })
     })
     .await
     .map_err(|join| join.to_string())?
 }
 
-/// 把工作副本导出到指定目录（覆盖同名 collection.db）。
+/// 导出所选收藏夹涉及的谱面集（去重）。与主导出同一套流程：格式
+/// （archive=.osz / folder=文件夹）、硬链接、覆盖、跳过、进度与终止全部生效。
+#[tauri::command]
+pub async fn export_selected_sets(
+    app: tauri::AppHandle,
+    cancel: tauri::State<'_, crate::exporter::ExportCancel>,
+    cache: tauri::State<'_, std::sync::Arc<CachedLibrary>>,
+    md5s: Vec<String>,
+    out_dir: String,
+    format: Option<String>,
+    hardlink: Option<bool>,
+    overwrite: Option<bool>,
+) -> Result<crate::exporter::ExportResult, String> {
+    let cache = cache.inner().clone();
+    let folder = format.as_deref().is_some_and(crate::exporter::is_folder);
+    let hardlink = hardlink.unwrap_or(false);
+    let overwrite = overwrite.unwrap_or(false);
+    crate::exporter::export_loop(app, cancel.0.clone(), out_dir, move |_out, notices, skipped| {
+        if md5s.is_empty() {
+            return Err("未选择任何谱面".into());
+        }
+        let library = realm_library(&cache)?;
+        let files_root = platform::lazer_files_root().ok_or("无法确定 lazer 文件存储目录")?;
+        export_sets_for_md5s(
+            &library,
+            &files_root,
+            &md5s,
+            folder,
+            hardlink,
+            overwrite,
+            &notices,
+            &skipped,
+        )
+    })
+    .await
+}
+
+/// 按 MD5 集合生成谱面集导出条目（同一谱面集只导出一次）。
+/// 返回（展示名, 写盘闭包）列表，交给 export_loop 执行。
+#[allow(clippy::type_complexity)]
+fn export_sets_for_md5s(
+    library: &lazer_realm::RealmLibrary,
+    files_root: &Path,
+    md5s: &[String],
+    folder: bool,
+    hardlink: bool,
+    overwrite: bool,
+    notices: &std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    skipped: &std::sync::Arc<std::sync::Mutex<usize>>,
+) -> Result<Vec<(String, Box<dyn FnOnce(&Path, &dyn Fn(&str)) -> Result<(), String> + Send>)>, String> {
+    use std::collections::HashSet;
+
+    let mut md5_to_set_id: HashMap<&str, &str> = HashMap::new();
+    for set in &library.sets {
+        for beatmap in &set.beatmaps {
+            if !beatmap.md5.is_empty() {
+                md5_to_set_id.insert(beatmap.md5.as_str(), set.id.as_str());
+            }
+        }
+    }
+    let mut exported_ids: HashSet<&str> = HashSet::new();
+    let mut items: Vec<(String, Box<dyn FnOnce(&Path, &dyn Fn(&str)) -> Result<(), String> + Send>)> =
+        Vec::new();
+    for md5 in md5s {
+        let Some(set_id) = md5_to_set_id.get(md5.as_str()) else {
+            continue;
+        };
+        if !exported_ids.insert(set_id) {
+            continue;
+        }
+        let Some(set) = library.sets.iter().find(|s| s.id == *set_id) else {
+            continue;
+        };
+        let mut name = format!("{} - {}", set.artist, set.title);
+        if name.trim() == "-" || name.trim().is_empty() {
+            name = set.id.clone();
+        }
+        if set.online_id > 0 {
+            name = format!("{} {}", set.online_id, name);
+        }
+        let entries: Vec<(String, String)> = set
+            .files
+            .iter()
+            .map(|file| (file.filename.clone(), file.hash.clone()))
+            .collect();
+        let files_root = files_root.to_path_buf();
+        if folder {
+            let out_name = crate::exporter::sanitize(&name);
+            let notices = std::sync::Arc::clone(notices);
+            let skipped = std::sync::Arc::clone(skipped);
+            items.push((
+                out_name.clone(),
+                Box::new(move |out: &Path, report: &dyn Fn(&str)| {
+                    crate::exporter::write_folder(
+                        out,
+                        &out_name,
+                        &files_root,
+                        &entries,
+                        hardlink,
+                        overwrite,
+                        &notices,
+                        &skipped,
+                        report,
+                    )
+                }),
+            ));
+        } else {
+            let osz = format!("{}.osz", crate::exporter::sanitize(&name));
+            let skipped = std::sync::Arc::clone(skipped);
+            items.push((
+                osz.clone(),
+                Box::new(move |out: &Path, _report: &dyn Fn(&str)| {
+                    if out.join(&osz).exists() && !overwrite {
+                        if let Ok(mut count) = skipped.lock() {
+                            *count += 1;
+                        }
+                        return Ok(());
+                    }
+                    crate::exporter::write_zip(&out.join(&osz), &files_root, &entries)
+                }),
+            ));
+        }
+    }
+    Ok(items)
+}
+
+/// 把工作副本导出为指定文件（可重命名、可替换既有文件，由保存对话框决定）。
 #[tauri::command]
 pub async fn export_collection_copy(
     stable_dir: String,
-    target_dir: String,
+    target_file: String,
 ) -> Result<String, String> {
     tokio::task::spawn_blocking(move || {
         let copy = PathBuf::from(&stable_dir).join("collection.export.db");
         if !copy.is_file() {
             return Err("工作副本不存在，请先读取数据".into());
         }
-        let target = PathBuf::from(&target_dir).join("collection.db");
+        let target = PathBuf::from(&target_file);
         std::fs::copy(&copy, &target)
             .map_err(|e| format!("导出失败：{e}"))
             .map(|_| target.display().to_string())
@@ -503,6 +637,7 @@ pub async fn delete_stable_collections(
             written_collections: written,
             written_hashes: removed,
             backup: out_path.display().to_string(),
+            folders_written: 0,
         })
     })
     .await

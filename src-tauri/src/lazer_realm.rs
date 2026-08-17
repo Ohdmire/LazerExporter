@@ -443,6 +443,10 @@ fn parse_collections(store: &mut RowStore<'_>, library: &mut RealmLibrary) -> Re
         if let Some(Value::List(values)) = row.get("BeatmapMD5Hashes") {
             for value in values {
                 if let Value::String(md5) = value {
+                    // realm 中同一难度可能被收藏多次，去重保证行数与选择集一致。
+                    if md5s.contains(md5) {
+                        continue;
+                    }
                     md5s.push(md5.clone());
                     if let Some(set_id) = md5_to_set.get(md5.as_str()) {
                         if !set_ids.iter().any(|existing| existing == set_id) {
@@ -826,11 +830,5 @@ mod bench_phases {
             stat.as_secs_f64() / total.as_secs_f64() * 100.0
         );
         println!("{:<28} {:>8.2} s", "总计", total.as_secs_f64());
-        let lookup_s = ROW_LOOKUP_MICROS.load(std::sync::atomic::Ordering::Relaxed) as f64 / 1e6;
-        let lookups = ROW_LOOKUP_MICROS_COUNT.load(std::sync::atomic::Ordering::Relaxed);
-        println!(
-            "其中 RowStore::row 解引用: {lookup_s:.2} s ({:.1}%), 共 {lookups} 次",
-            lookup_s / total.as_secs_f64() * 100.0
-        );
     }
 }

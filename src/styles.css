@@ -393,6 +393,26 @@ header h1 {
   margin-bottom: 12px;
 }
 
+#page-nav .chip {
+  padding: 6px 18px;
+  border-radius: 999px;
+  font-size: 13px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--muted);
+}
+
+#page-nav .chip:hover {
+  border-color: var(--accent);
+}
+
+#page-nav .chip.active {
+  border-color: var(--accent);
+  background: var(--accent-strong);
+  color: #fff;
+  font-weight: 600;
+}
+
 .page-title {
   font-size: 17px;
   color: var(--accent);
@@ -490,10 +510,20 @@ header h1 {
   padding: 2px 6px;
 }
 
-.collection-head .arrow {
-  width: 14px;
+.collection-head .expand-btn {
+  margin-left: auto;
+  border: 1px solid var(--border);
+  background: var(--bg);
   color: var(--muted);
+  border-radius: 6px;
   font-size: 11px;
+  padding: 4px 9px;
+  cursor: pointer;
+}
+
+.collection-head .expand-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .collection-beatmaps {
@@ -546,6 +576,17 @@ header h1 {
   gap: 18px;
   flex-wrap: wrap;
   align-items: baseline;
+}
+
+.export-format-row input[type="text"] {
+  flex: 1;
+  min-width: 180px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 12px;
 }
 
 .export-format-row .setting-desc {

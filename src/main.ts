@@ -1,6 +1,6 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import { parseQuery, setMatches, simpleMatch } from "./search";
 import type { Beatmap, BeatmapSetLike } from "./search";
 import "./styles.css";
@@ -80,7 +80,6 @@ const els = {
   collectionDelete: document.getElementById("collection-delete")!,
   collectionExportCopy: document.getElementById("collection-export-copy")!,
   collectionResult: document.getElementById("collection-result")!,
-  dupFilter: document.getElementById("dup-filter")!,
   diskUsageBtn: document.getElementById("disk-usage-btn")!,
   usageContent: document.getElementById("usage-content")!,
   selectAllCollections: document.getElementById("select-all-collections")!,
@@ -124,6 +123,7 @@ const els = {
   hardlinkRow: document.getElementById("hardlink-row")!,
   hardlinkMode: document.getElementById("hardlink-mode") as HTMLInputElement,
   overwriteMode: document.getElementById("overwrite-mode") as HTMLInputElement,
+  exportSelectedSets: document.getElementById("export-selected-sets")!,
   exportBrowse: document.getElementById("export-browse")!,
   exportCancel: document.getElementById("export-cancel")!,
   exportConfirm: document.getElementById("export-confirm") as HTMLButtonElement,
@@ -143,10 +143,9 @@ const coverBySetId = new Map<string, string>();
 // 当前收藏夹内的加入顺序（id → 序号），供“按收藏顺序排序”。
 const collectionOrderById = new Map<string, number>();
 let tab: Tab = "beatmaps";
-// 当前主页面：export（导出列表）/ space（空间管理）/ collections（集合管理）。
+// 当前主页面：export（导出列表）/ space（空间管理）/ collections（收藏夹管理）。
 let page: "export" | "space" | "collections" | "settings" = "export";
 // 仅显示重复导入的谱面集。
-let dupFilterOn = false;
 
 function switchPage(next: "export" | "space" | "collections" | "settings") {
   page = next;
@@ -498,7 +497,7 @@ function observeCovers() {
 }
 
 // asset 协议加载失败时的兜底：走 IPC 读 blob 转 data URL（error 不冒泡，需捕获）。
-// 挂在 document 上可同时覆盖导出列表与集合管理页的封面。
+// 挂在 document 上可同时覆盖导出列表与收藏夹管理页的封面。
 document.addEventListener(
   "error",
   (event) => {
@@ -559,7 +558,6 @@ function render() {
   const matcher = makeMatcher();
   const sortValue = SORT_OPTIONS[tab][sortKey][1];
   els.rulesetFilter.hidden = tab === "skins";
-  els.dupFilter.classList.toggle("active", dupFilterOn);
   renderCollectionChips();
   if (tab === "beatmaps") {
     const criteria = parseQuery(els.search.value);
@@ -586,23 +584,10 @@ function render() {
               (s) => !library!.collections.some((c) => c.set_ids.includes(s.id)),
             )
           : library.sets;
-    // 重复筛选：同上架编号（>0）在库中出现多次的谱面集。
-    let dupCounts: Map<number, number> | null = null;
-    if (dupFilterOn) {
-      dupCounts = new Map();
-      for (const set of library.sets) {
-        if (set.online_id > 0) {
-          dupCounts.set(set.online_id, (dupCounts.get(set.online_id) ?? 0) + 1);
-        }
-      }
-    }
     const items = sortCurrent(
       collection
         .filter((s) =>
           rulesetFilter === "" ? true : s.beatmaps.some((b) => b.ruleset === rulesetFilter),
-        )
-        .filter((s) =>
-          dupCounts ? s.online_id > 0 && (dupCounts.get(s.online_id) ?? 0) > 1 : true,
         )
         .filter((s) => setMatches(s, criteria)),
       (s) => sortValue(s as never),
@@ -619,10 +604,7 @@ function render() {
           `${s.beatmaps.length} 难度`,
           fmtSize(setTotalSize(s)),
         ];
-        if (s.online_id > 0) {
-          const dupCount = dupCounts?.get(s.online_id) ?? 0;
-          parts.push(dupCount > 1 ? `#${s.online_id}(重复×${dupCount})` : `#${s.online_id}`);
-        }
+        if (s.online_id > 0) parts.push(`#${s.online_id}`);
         // 默认显示谱面集的难度范围：min ~ max，各自按星级配色渲染成两个徽章。
         const stars = s.beatmaps.map((b) => b.star_rating).filter((v) => v > 0);
         if (stars.length) {
@@ -695,9 +677,8 @@ function updateSelectionInfo() {
   const boxes = els.list.querySelectorAll<HTMLInputElement>('input[type="checkbox"]');
   const checked = Array.from(boxes).filter((b) => b.checked);
   const size = checked.reduce((sum, b) => sum + (sizeById.get(b.dataset.id!) || 0), 0);
-  els.selectionInfo.textContent = checked.length
-    ? `已选 ${checked.length} 项（${fmtSize(size)}）`
-    : "";
+  // 始终显示（含 0 项），避免选中数变化时工具栏布局跳动。
+  els.selectionInfo.textContent = `已选 ${checked.length} 项（${fmtSize(size)}）`;
   els.exportBtn.disabled = checked.length === 0 || exporting;
 }
 
@@ -848,7 +829,7 @@ async function resetDir() {
 // ---- 导出确认弹窗 ----
 
 // 弹窗打开时暂存的待导出内容（点"开始导出"时使用）。
-let pendingExport: { ids: string[]; label: string } | null = null;
+let pendingExport: { ids: string[]; label: string; md5s?: string[] } | null = null;
 
 const TYPE_LABELS: Record<Tab, string> = {
   beatmaps: "谱面（.osz）",
@@ -857,21 +838,28 @@ const TYPE_LABELS: Record<Tab, string> = {
 };
 
 /** 打开导出确认弹窗：显示导出内容统计，路径记忆上次选择。 */
-function openExportModal() {
+function openExportModal(
+  override?: { ids: string[]; label: string; md5s?: string[] },
+  preferredDir?: string,
+) {
   if (exporting || !library) return;
-  const ids = selectedIds();
-  if (!ids.length) return;
-  const label = TYPE_LABELS[tab];
+  const ids = override?.ids ?? selectedIds();
+  if (!ids.length && !override) return;
+  const label = override?.label ?? TYPE_LABELS[tab];
   const size = ids.reduce((sum, id) => sum + (sizeById.get(id) || 0), 0);
-  pendingExport = { ids, label };
-  els.exportSummary.textContent = `将导出 ${ids.length} 个${label}，共 ${fmtSize(size)}。`;
+  pendingExport = override
+    ? { ...override }
+    : { ids, label };
+  els.exportSummary.textContent = pendingExport.md5s
+    ? `将按下方选项导出所选集合的谱面集（${new Set(pendingExport.md5s).size} 个，去重后）。`
+    : `将导出 ${ids.length} 个${label}，共 ${fmtSize(size)}。`;
   let lastDir: string | null = null;
   try {
     lastDir = localStorage.getItem("export-dir");
   } catch {
     /* 忽略 */
   }
-  els.exportPath.value = lastDir ?? "";
+  els.exportPath.value = preferredDir?.trim() || lastDir || "";
   // 回放导出就是单个 .osr 文件，压缩包/文件夹选项不适用。
   els.exportFormatRow.hidden = tab === "replays";
   if (tab === "replays") {
@@ -920,13 +908,25 @@ async function browseExportPath() {
 
 async function exportSelected() {
   if (exporting || !library || !pendingExport) return;
-  const { ids, label } = pendingExport;
+  const { ids, label, md5s: exportMd5s } = pendingExport;
   const outDir = els.exportPath.value.trim();
   if (!outDir) return;
 
-  const command =
-    tab === "beatmaps" ? "export_sets" : tab === "skins" ? "export_skins" : "export_replays";
-  const argName = tab === "beatmaps" ? "setIds" : tab === "skins" ? "skinIds" : "scoreIds";
+  const useMd5s = !!pendingExport?.md5s;
+  const command = useMd5s
+    ? "export_selected_sets"
+    : tab === "beatmaps"
+      ? "export_sets"
+      : tab === "skins"
+        ? "export_skins"
+        : "export_replays";
+  const argName = useMd5s
+    ? "md5s"
+    : tab === "beatmaps"
+      ? "setIds"
+      : tab === "skins"
+        ? "skinIds"
+        : "scoreIds";
   const format =
     document.querySelector<HTMLInputElement>('input[name="export-format"]:checked')?.value ??
     "archive";
@@ -939,7 +939,7 @@ async function exportSelected() {
     // 强制覆盖：默认不勾选（跳过已存在文件）。
     overwrite: els.overwriteMode.checked,
   };
-  args[argName] = ids;
+  args[argName] = useMd5s ? (exportMd5s ?? []) : ids;
 
   pendingExport = null;
   els.exportModal.hidden = true;
@@ -1071,6 +1071,7 @@ async function runDedupe() {
   dedupeRunning = true;
   els.dedupeRun.disabled = true;
   els.dedupeProgress.hidden = false;
+  els.dedupeStop.hidden = false;
   els.dedupeResult.textContent = "";
   els.dedupeProgressFill.style.width = "0%";
   els.dedupeProgressText.textContent = "准备扫描…";
@@ -1115,11 +1116,12 @@ async function runDedupe() {
   } finally {
     dedupeRunning = false;
     els.dedupeRun.disabled = false;
+    els.dedupeStop.hidden = true;
   }
 }
 
 
-// ---- 集合管理：lazer 收藏夹 ↔ stable collection.db（osu-db 读写 + osu!.db 定位）----
+// ---- 收藏夹管理：lazer 收藏夹 ↔ stable collection.db（osu-db 读写 + osu!.db 定位）----
 
 interface BeatmapRef {
   md5: string;
@@ -1186,11 +1188,11 @@ function renderCollectionTable(
     header.className = "row slim collection-head";
     header.innerHTML = `
       <input type="checkbox"${defaultChecked ? " checked" : ""} />
-      <span class="arrow">▸</span>
       <div class="meta">
         <div class="title">${escapeHtml(collection.name)}</div>
         <div class="sub">${collection.beatmaps.length} 张谱面</div>
-      </div>`;
+      </div>
+      <button class="expand-btn" title="展开/收起">▸</button>`;
     block.appendChild(header);
 
     const beatmapList = document.createElement("div");
@@ -1213,7 +1215,7 @@ function renderCollectionTable(
         ${cover}
         <div class="meta">
           <div class="title">${escapeHtml(beatmap.label || beatmap.md5.slice(0, 12))}</div>
-          <div class="sub">${beatmap.matched ? "" : "未在对侧定位到 · "}${beatmap.md5.slice(0, 16)}…</div>
+          <div class="sub">${beatmap.matched ? "" : "未获取到谱面数据 · "}${beatmap.md5.slice(0, 16)}…</div>
         </div>`;
       beatmapList.appendChild(row);
     }
@@ -1233,11 +1235,13 @@ function renderCollectionTable(
       allBox.checked = md5s.size === collection.beatmaps.length;
     };
 
-    // 展开/收起：只响应箭头点击，避免与行点击/shift 选择误触。
-    header.querySelector(".arrow")!.addEventListener("click", () => {
+    // 展开/收起：独立的右侧按钮，与选择互不冲突。
+    const expandBtn = header.querySelector<HTMLButtonElement>(".expand-btn")!;
+    expandBtn.addEventListener("click", (event) => {
+      event.stopPropagation();
       const expanded = beatmapList.style.display !== "none";
       beatmapList.style.display = expanded ? "none" : "flex";
-      header.querySelector(".arrow")!.textContent = expanded ? "▸" : "▾";
+      expandBtn.textContent = expanded ? "▸" : "▾";
     });
 
     // 集合全选框：复选框指针穿透，点击集合头（非箭头区域）切换全选/全不选。
@@ -1258,7 +1262,7 @@ function renderCollectionTable(
       if (head) head.checked = checked;
     };
     header.addEventListener("click", (event) => {
-      if ((event.target as HTMLElement).closest(".arrow")) return;
+      if ((event.target as HTMLElement).closest(".expand-btn")) return;
       if (event.shiftKey && lastCollectionName) {
         const order = collections.map((c) => c.name);
         const from = order.indexOf(lastCollectionName);
@@ -1383,6 +1387,13 @@ function renderCollectionTable(
       return collections.find((c) => c.name === name)?.beatmaps.map((b) => b.md5) ?? [];
     },
     removeMd5s(target: { name: string; md5s: string[] }[]) {
+      const removed = new Set(target.flatMap((item) => item.md5s));
+      // 同步裁剪数据源，保证之后 全选/反选 的“全部”就是剩余谱面。
+      for (const collection of collections) {
+        if (target.some((item) => item.name === collection.name)) {
+          collection.beatmaps = collection.beatmaps.filter((b) => !removed.has(b.md5));
+        }
+      }
       for (const item of target) {
         const block = blocksByName.get(item.name);
         const md5s = selection.get(item.name);
@@ -1423,6 +1434,8 @@ function selectionToParam(
 
 let lazerColumn: ColumnController | null = null;
 let stableColumn: ColumnController | null = null;
+// 最近一次读取的收藏夹页数据（无图模式切换时据此重渲染）。
+let lastCollectionPage: CollectionPageData | null = null;
 
 async function loadCollectionPage() {
   const stableDir = els.stablePath.textContent.trim();
@@ -1435,6 +1448,7 @@ async function loadCollectionPage() {
     els.collectionSummary.textContent =
       `stable 目录:${page.stableDir} · osu!.db 收录 ${page.osuDbBeatmaps.toLocaleString()} 张难度 · ` +
       `lazer 收藏夹 ${page.lazerCollections.length} 个 · collection.db 收藏夹 ${page.stableCollections.length} 个`;
+    lastCollectionPage = page;
     lazerColumn = renderCollectionTable(els.lazerCollectionList, page.lazerCollections, true);
     stableColumn = renderCollectionTable(els.stableCollectionList, page.stableCollections, false);
   } catch (error) {
@@ -1450,13 +1464,22 @@ function syncMode(): string {
 }
 
 async function collectionResultOf(
-  promise: Promise<{ writtenCollections: number; written_hashes?: number; writtenHashes?: number; backup: string }>,
+  promise: Promise<{
+    writtenCollections: number;
+    written_hashes?: number;
+    writtenHashes?: number;
+    backup: string;
+    folders_written?: number;
+    foldersWritten?: number;
+  }>,
   reload = true,
 ) {
   try {
     const result = await promise;
+    const folders = result.foldersWritten ?? result.folders_written ?? 0;
     els.collectionResult.textContent =
       `完成（工作副本）：已复制到 ${result.backup}，现有 ${result.writtenCollections} 个收藏夹。` +
+      (folders > 0 ? `已同时导出 ${folders} 个谱面集文件夹。` : "") +
       `原 collection.db 未被修改；点“导出 collection.db”可把它落到任意目录。`;
     if (reload) await loadCollectionPage();
   } catch (error) {
@@ -1639,15 +1662,32 @@ els.collectionSync.addEventListener("click", () => {
   }
   collectionResultOf(invoke("sync_collections", { stableDir, selections, mode }));
 });
+els.exportSelectedSets.addEventListener("click", () => {
+  if (!lazerColumn) return;
+  const md5s = [...lazerColumn.selection.values()].flatMap((set) => [...set]);
+  if (!md5s.length) {
+    els.collectionResult.textContent = "未选择任何谱面。";
+    return;
+  }
+  // 与主导出同一套确认弹窗：格式/硬链接/覆盖/跳过全部生效后才执行。
+  openExportModal({ ids: [], label: "谱面集（所选集合谱面）", md5s });
+});
 els.collectionExportCopy.addEventListener("click", async () => {
   const stableDir = els.stablePath.textContent.trim();
   if (stableDir === "未设置") return;
-  const target = await open({ directory: true, title: "选择导出目录" });
+  // 保存对话框：可重命名、可选择替换既有文件。
+  const target = await save({
+    title: "导出 collection.db",
+    defaultPath: "collection.db",
+    filters: [{ name: "collection.db", extensions: ["db"] }],
+  });
   if (!target) return;
   try {
-    const path = await invoke<string>("export_collection_copy", { stableDir, targetDir: target });
-    els.collectionResult.textContent =
-      `已导出工作副本到：${path}（目标目录中的同名文件会被覆盖）。`;
+    const path = await invoke<string>("export_collection_copy", {
+      stableDir,
+      targetFile: target,
+    });
+    els.collectionResult.textContent = `已导出到：${path}`;
   } catch (error) {
     els.collectionResult.textContent = `导出失败：${error}`;
   }
@@ -1703,7 +1743,7 @@ els.stableBrowse.addEventListener("click", async () => {
   updateStableDirDisplays();
 });
 els.resetDir.addEventListener("click", resetDir);
-els.exportBtn.addEventListener("click", openExportModal);
+els.exportBtn.addEventListener("click", () => openExportModal());
 els.exportConfirm.addEventListener("click", exportSelected);
 els.exportBrowse.addEventListener("click", browseExportPath);
 els.exportClose.addEventListener("click", closeExportModal);
@@ -1741,10 +1781,6 @@ function debounce<F extends (...args: never[]) => void>(fn: F, delay = 200) {
 }
 
 els.navSearch.addEventListener("input", debounce(renderSidebar));
-els.dupFilter.addEventListener("click", () => {
-  dupFilterOn = !dupFilterOn;
-  render();
-});
 els.rulesetFilter.addEventListener("click", (event) => {
   const chip = (event.target as HTMLElement).closest<HTMLButtonElement>(".chip");
   if (!chip) return;
@@ -1764,6 +1800,19 @@ els.perfMode.addEventListener("change", () => {
   perfMode = els.perfMode.checked;
   persistSetting("setting-perf", perfMode);
   render();
+  // 收藏夹管理页若已加载，按新开关重渲染两列。
+  if (lastCollectionPage) {
+    lazerColumn = renderCollectionTable(
+      els.lazerCollectionList,
+      lastCollectionPage.lazerCollections,
+      true,
+    );
+    stableColumn = renderCollectionTable(
+      els.stableCollectionList,
+      lastCollectionPage.stableCollections,
+      false,
+    );
+  }
 });
 
 els.sortKey.addEventListener("change", () => {
@@ -1793,6 +1842,15 @@ await listen<{ done: number; total: number; name: string }>("export-progress", (
 });
 
 restoreSettings();
+// 恢复手动指定的 lazer 目录（localStorage 记忆），再加载库。
+try {
+  const savedLazerDir = localStorage.getItem("lazer-dir");
+  if (savedLazerDir) {
+    await invoke("set_lazer_data_dir", { path: savedLazerDir });
+  }
+} catch {
+  /* 目录已失效时静默回退自动检测 */
+}
 try {
   const stableDir = localStorage.getItem("stable-dir");
   if (stableDir) els.stablePath.textContent = stableDir;

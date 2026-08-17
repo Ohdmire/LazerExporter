@@ -61,6 +61,20 @@ pub(crate) fn sanitize(name: &str) -> String {
         .to_string()
 }
 
+/// 单层名称（文件夹名、文件名，不含子路径）：'/' 也视为非法字符换下划线，
+/// 避免谱面/皮肤标题里的 '/' 被当成路径分隔符拆出嵌套目录。
+pub(crate) fn sanitize_component(name: &str) -> String {
+    name.chars()
+        .map(|c| match c {
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
+            c => c,
+        })
+        .collect::<String>()
+        .trim()
+        .trim_matches('.')
+        .to_string()
+}
+
 /// 按前端的 Unicode 开关取文件名用名：关 = 罗马字优先（回退 Unicode）。
 fn display_name_with(use_unicode: bool, romanized: &str, unicode: &str) -> String {
     let (first, second) = if use_unicode { (unicode, romanized) } else { (romanized, unicode) };
@@ -280,7 +294,7 @@ pub(crate) fn write_folder(
     skipped: &Arc<std::sync::Mutex<usize>>,
     report: &dyn Fn(&str),
 ) -> Result<(), String> {
-    let target = out_dir.join(sanitize(base_name));
+    let target = out_dir.join(sanitize_component(base_name));
     std::fs::create_dir_all(&target)
         .map_err(|e| format!("创建目录失败（{}）：{e}", target.display()))?;
     for (file_name, hash) in entries {
@@ -339,7 +353,7 @@ pub async fn export_sets(
                 .map(|file| (file.filename.clone(), file.hash.clone()))
                 .collect();
             let files_root = files_root.clone();
-            let out_name = sanitize(&name);
+            let out_name = sanitize_component(&name);
             let extra = folder_out_dir.as_ref().map(|dir| {
                 (
                     PathBuf::from(dir),
@@ -437,7 +451,7 @@ pub async fn export_skins(
                 .map(|file| (file.filename.clone(), file.hash.clone()))
                 .collect();
             let files_root = files_root.clone();
-            let out_name = sanitize(&name);
+            let out_name = sanitize_component(&name);
             if folder {
                 let notices = notices.clone();
                 let skipped = skipped.clone();
@@ -512,7 +526,7 @@ pub async fn export_replays(
             }
             let hash = score.replay_hash.clone();
             let files_root = files_root.clone();
-            let out_name = format!("{}.osr", sanitize(&name));
+            let out_name = format!("{}.osr", sanitize_component(&name));
             let notices = notices.clone();
             let skipped = skipped.clone();
             items.push((

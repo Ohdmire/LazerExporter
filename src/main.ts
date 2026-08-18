@@ -80,7 +80,7 @@ const els = {
   collectionDelete: document.getElementById("collection-delete")!,
   collectionExportCopy: document.getElementById("collection-export-copy")!,
   collectionResult: document.getElementById("collection-result")!,
-  diskUsageBtn: document.getElementById("disk-usage-btn")!,
+  diskUsageBtn: document.getElementById("disk-usage-btn") as HTMLButtonElement,
   usageContent: document.getElementById("usage-content")!,
   selectAllCollections: document.getElementById("select-all-collections")!,
   stablePath: document.getElementById("stable-dir-display")!,

@@ -291,6 +291,7 @@ fn run(
         .unwrap_or_else(|| std::thread::available_parallelism().map_or(4, |count| count.get()));
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(threads)
+        .stack_size(4 * 1024 * 1024)
         .build()
         .map_err(|error| format!("无法创建哈希线程池：{error}"))?;
     use rayon::prelude::*;
@@ -414,7 +415,9 @@ fn hash_file_sized(path: &Path, expected_size: u64) -> std::io::Result<String> {
         ));
     }
     let mut hasher = Sha256::new();
-    let mut buffer = [0u8; 128 * 1024];
+    // 必须堆分配：本函数会被内联进 rayon 相互递归的任务切分帧，
+    // 128KB 栈数组曾把默认 2MB 线程栈打穿导致栈溢出闪退（c00000fd）。
+    let mut buffer = vec![0u8; 128 * 1024];
     loop {
         let read = file.read(&mut buffer)?;
         if read == 0 {

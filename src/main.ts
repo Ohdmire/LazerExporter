@@ -1063,7 +1063,12 @@ function setProgress(fraction: number, text: string) {
 
 // ---- 空间维护工具：磁盘占用统计 / 与 stable 去重压缩 ----
 
+let usageRunning = false;
+
 async function showDiskUsage() {
+  if (usageRunning) return;
+  usageRunning = true;
+  els.diskUsageBtn.disabled = true;
   els.usageContent.textContent = "正在统计…";
   try {
     const usage = await invoke<{
@@ -1082,6 +1087,9 @@ async function showDiskUsage() {
       <div class="setting-desc">从 stable 导入的文件以硬链接存在，删除 lazer 目录不会释放共享部分的空间。</div>`;
   } catch (error) {
     els.usageContent.textContent = `统计失败：${error}`;
+  } finally {
+    usageRunning = false;
+    els.diskUsageBtn.disabled = false;
   }
 }
 
@@ -1133,9 +1141,10 @@ async function runDedupe(dryRun: boolean) {
         lines.push(
           `扫描完成：${result.candidateCount} 个文件与 stable 完全重复，可释放约 ${fmtSize(result.reclaimableSize)}。`,
         );
-        lines.push("点击“执行替换”开始硬链接替换（再次扫描将重新计算）。");
+        lines.push("点击“压缩空间”开始硬链接替换（再次扫描将重新计算）。");
         els.dedupeExecute.hidden = false;
         els.dedupeExecute.disabled = false;
+        els.dedupeRun.textContent = "再次扫描";
       } else {
         lines.push("扫描完成：没有发现与 stable 重复的文件。");
         els.dedupeExecute.hidden = true;

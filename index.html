@@ -177,9 +177,8 @@
             <div id="space-stable-dir" class="setting-desc">未设置 stable 目录（在设置页选择）</div>
             <div class="panel">
                 <h3 class="section-title">磁盘占用统计</h3>
-                <div id="usage-content" class="usage-content">
-                  <button id="disk-usage-btn" class="compact">开始统计</button>
-                </div>
+                <button id="disk-usage-btn" class="compact">开始统计</button>
+                <div id="usage-content" class="usage-content"></div>
                 <h3 class="section-title">压缩 lazer 空间（与 stable 去重）</h3>
                 <div class="setting-desc">
                   扫描 stable 谱面目录，把 lazer files/
@@ -187,6 +186,15 @@
                   先关闭 osu!lazer 再执行。
                 </div>
                 <div class="modal-actions">
+                  <label class="dedupe-threads-label" for="dedupe-threads">并发数
+                    <select id="dedupe-threads" title="计算 SHA-256 的线程数。自动＝逻辑核心数；闪退时可调低">
+                      <option value="0">自动</option>
+                      <option value="1">1 线程</option>
+                      <option value="2">2 线程</option>
+                      <option value="4">4 线程</option>
+                      <option value="8">8 线程</option>
+                    </select>
+                  </label>
                   <button id="dedupe-run" class="primary">开始扫描</button>
                   <button id="dedupe-execute" class="primary" hidden>压缩空间</button>
                 </div>

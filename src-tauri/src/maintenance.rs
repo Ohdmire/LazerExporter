@@ -145,10 +145,13 @@ pub async fn dedupe_lazer_files(
     app: tauri::AppHandle,
     stable_root: String,
     dry_run: bool,
+    hash_threads: Option<usize>,
 ) -> Result<DedupeResult, String> {
-    tokio::task::spawn_blocking(move || run(&app, PathBuf::from(stable_root), dry_run))
-        .await
-        .map_err(|join| join.to_string())?
+    tokio::task::spawn_blocking(move || {
+        run(&app, PathBuf::from(stable_root), dry_run, hash_threads)
+    })
+    .await
+    .map_err(|join| join.to_string())?
 }
 
 #[tauri::command]
@@ -156,7 +159,12 @@ pub fn cancel_dedupe() {
     CANCELLED.store(true, Ordering::Relaxed);
 }
 
-fn run(app: &tauri::AppHandle, stable_root: PathBuf, dry_run: bool) -> Result<DedupeResult, String> {
+fn run(
+    app: &tauri::AppHandle,
+    stable_root: PathBuf,
+    dry_run: bool,
+    hash_threads: Option<usize>,
+) -> Result<DedupeResult, String> {
     CANCELLED.store(false, Ordering::Relaxed);
 
     // 执行模式：有缓存（刚扫描过）时直接进入替换阶段，不重复扫描/哈希。
@@ -274,23 +282,35 @@ fn run(app: &tauri::AppHandle, stable_root: PathBuf, dry_run: bool) -> Result<De
     result.hashed_stable_count = candidates.len() as u64;
 
     // 3. 并行计算候选文件的 SHA-256（多线程加速），与 lazer 文件名（即哈希）匹配。
+    // 线程数可由用户指定：满核并发批量读文件的行为特征容易触发安全软件的
+    // 行为监控（误判为勒索软件）导致进程被杀，调低并发可规避。
     reporter.emit("hash", 0, candidates.len(), true);
     let processed = AtomicUsize::new(0);
+    let threads = hash_threads
+        .filter(|&count| count >= 1)
+        .unwrap_or_else(|| std::thread::available_parallelism().map_or(4, |count| count.get()));
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(threads)
+        .build()
+        .map_err(|error| format!("无法创建哈希线程池：{error}"))?;
     use rayon::prelude::*;
-    let by_hash: HashMap<String, PathBuf> = candidates
-        .par_iter()
-        .filter_map(|(path, size)| {
-            if CANCELLED.load(Ordering::Relaxed) {
-                return None;
-            }
-            let pair = hash_file_sized(path, *size)
-                .ok()
-                .map(|hash| (hash, path.clone()));
-            let done = processed.fetch_add(1, Ordering::Relaxed) + 1;
-            reporter.emit("hash", done, candidates.len(), false);
-            pair
-        })
-        .collect();
+    let by_hash: HashMap<String, PathBuf> = pool
+        .install(|| {
+            candidates
+                .par_iter()
+                .filter_map(|(path, size)| {
+                    if CANCELLED.load(Ordering::Relaxed) {
+                        return None;
+                    }
+                    let pair = hash_file_sized(path, *size)
+                        .ok()
+                        .map(|hash| (hash, path.clone()));
+                    let done = processed.fetch_add(1, Ordering::Relaxed) + 1;
+                    reporter.emit("hash", done, candidates.len(), false);
+                    pair
+                })
+                .collect()
+        });
     if CANCELLED.load(Ordering::Relaxed) {
         result.cancelled = true;
         return Ok(result);

@@ -674,6 +674,44 @@ button.compact {
   gap: 10px;
 }
 
+.dedupe-threads-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: auto;
+  font-size: 13px;
+  color: var(--muted);
+  cursor: default;
+  user-select: none;
+}
+
+.dedupe-threads-label select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding: 7px 30px 7px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background-color: var(--panel);
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath fill='%239a97ab' d='M5 6 0 0h10z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 11px center;
+  color: var(--text);
+  font-size: 13px;
+  outline: none;
+  cursor: pointer;
+  transition: border-color 0.15s ease;
+}
+
+.dedupe-threads-label select:hover,
+.dedupe-threads-label select:focus {
+  border-color: var(--accent);
+}
+
+.dedupe-threads-label select option {
+  background: var(--panel);
+  color: var(--text);
+}
+
 .toolbar button#settings-toggle {
   padding: 8px 12px;
 }

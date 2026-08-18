@@ -95,6 +95,7 @@ const els = {
   dedupeExecute: document.getElementById("dedupe-execute") as HTMLButtonElement,
   dedupeProgress: document.getElementById("dedupe-progress")!,
   dedupeProgressText: document.getElementById("dedupe-progress-text")!,
+  dedupeThreads: document.getElementById("dedupe-threads") as HTMLSelectElement,
   dedupeProgressFill: document.getElementById("dedupe-progress-fill")!,
   dedupeStop: document.getElementById("dedupe-stop")!,
   dedupeResult: document.getElementById("dedupe-result")!,
@@ -179,6 +180,10 @@ function restoreSettings() {
   try {
     unicodeMode = localStorage.getItem("setting-unicode") !== "0";
     perfMode = localStorage.getItem("setting-perf") === "1";
+    const threads = localStorage.getItem("setting-dedupe-threads");
+    if (threads !== null && els.dedupeThreads.querySelector(`option[value="${threads}"]`)) {
+      els.dedupeThreads.value = threads;
+    }
   } catch {
     /* localStorage 不可用时用默认值 */
   }
@@ -1132,6 +1137,8 @@ async function runDedupe(dryRun: boolean) {
     }>("dedupe_lazer_files", {
       stableRoot,
       dryRun,
+      // 0 = 自动（逻辑核心数）；调低并发可减少安全软件行为监控误杀
+      hashThreads: Number(els.dedupeThreads.value),
     });
     const lines: string[] = [];
     if (result.cancelled) lines.push("已终止。");
@@ -1776,6 +1783,13 @@ els.dedupeRun.addEventListener("click", () => {
   runDedupe(true);
 });
 els.dedupeExecute.addEventListener("click", () => runDedupe(false));
+els.dedupeThreads.addEventListener("change", () => {
+  try {
+    localStorage.setItem("setting-dedupe-threads", els.dedupeThreads.value);
+  } catch {
+    /* 忽略持久化失败 */
+  }
+});
 els.dedupeStop.addEventListener("click", async () => {
   try {
     await invoke("cancel_dedupe");

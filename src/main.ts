@@ -807,8 +807,8 @@ async function load() {
     }
     // 顶栏与其他所有显示统一：storage.ini 的 FullPath 存在时一律显示那个目录。
     const shownDir = status.filesRoot ?? status.dataRoot ?? "?";
-    // 加载期间顶栏先显示目录，加载完成后再补全统计信息。
-    setStatus(`目录：${shownDir}`);
+    // 加载期间顶栏先显示目录与加载提示，加载完成后再补全统计信息。
+    setStatus(`目录：${shownDir} · 正在加载 realm 数据库…`);
     const result = await invoke<{ realmPath: string; library: Library }>("list_library");
     library = result.library;
     setStatus(
